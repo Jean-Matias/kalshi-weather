@@ -146,6 +146,8 @@ class LiveDashboardAppTests(unittest.TestCase):
         self.assertIn("Final Minutes Mode", html)
         self.assertIn("Official Temp Now", html)
         self.assertIn("Next Round Risk", html)
+        self.assertIn("Data Refresh", html)
+        self.assertIn("openFinalCities", html)
 
     def test_health_route_is_public(self):
         import live_app

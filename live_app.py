@@ -169,7 +169,7 @@ p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
   padding: 12px;
 }
 .card.final-open .finalPanel { display: block; }
-.finalGrid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+.finalGrid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
 .finalItem { background: #0c141b; border: 1px solid var(--line); border-radius: 6px; padding: 9px; }
 .finalItem span { color: var(--muted); display: block; font-size: 10px; font-weight: 800; margin-bottom: 5px; text-transform: uppercase; }
 .finalItem strong { display: block; font-size: 15px; overflow-wrap: anywhere; }
@@ -274,6 +274,7 @@ const statusText = document.getElementById('statusText');
 const updatedText = document.getElementById('updatedText');
 let nextRefreshAt = null;
 let refreshInFlight = false;
+const openFinalCities = new Set();
 
 function fmtTemp(value) {
   return value === null || value === undefined ? 'n/a' : `${Number(value).toFixed(1)}F`;
@@ -381,7 +382,7 @@ function render(payload) {
   updateCountdown();
   renderSummary(payload);
   cards.innerHTML = (payload.cities || []).map(city => `
-    <article class="card ${tone(city)}">
+    <article class="card ${tone(city)} ${openFinalCities.has(city.city) ? 'final-open' : ''}">
       <div class="card-main">
         <div class="card-head">
           <div>
@@ -390,7 +391,7 @@ function render(payload) {
           </div>
           <div class="cardActions">
             <span class="badge">${escapeHtml(city.reachability_label || 'n/a')}</span>
-            <button class="finalToggle" type="button" data-final-city="${escapeAttribute(city.city)}">Final Minutes Mode</button>
+            <button class="finalToggle" type="button" data-final-city="${escapeAttribute(city.city)}">${openFinalCities.has(city.city) ? 'Hide Final Read' : 'Final Minutes Mode'}</button>
           </div>
         </div>
         ${finalMinutesPanel(city)}
@@ -439,9 +440,16 @@ function finalMinutesPanel(city) {
         <div class="finalItem"><span>Next Round Risk</span><strong>${escapeHtml(nextRoundDistance(city))}</strong></div>
         <div class="finalItem"><span>Last Obs</span><strong class="obsAge" data-obs-time="${escapeAttribute(city.latest_observation_time || '')}">${escapeHtml(lastObsAge(city))}</strong></div>
         <div class="finalItem"><span>Peak Status</span><strong class="peakStatus" data-peak-time="${escapeAttribute(city.forecast_high_time || '')}">${escapeHtml(peakStatus(city))}</strong></div>
+        <div class="finalItem"><span>Data Refresh</span><strong class="finalRefreshCountdown">${escapeHtml(refreshCountdownText())}</strong></div>
       </div>
     </div>
   `;
+}
+
+function refreshCountdownText() {
+  if (!nextRefreshAt || Number.isNaN(nextRefreshAt.getTime())) return 'waiting';
+  const seconds = Math.max(0, Math.ceil((nextRefreshAt.getTime() - Date.now()) / 1000));
+  return seconds > 0 ? `${seconds}s` : 'due now';
 }
 
 function updateCountdown() {
@@ -450,7 +458,10 @@ function updateCountdown() {
     return;
   }
   const seconds = Math.max(0, Math.ceil((nextRefreshAt.getTime() - Date.now()) / 1000));
-  updatedText.textContent = seconds > 0 ? `${seconds}s` : 'due now';
+  updatedText.textContent = refreshCountdownText();
+  document.querySelectorAll('.finalRefreshCountdown').forEach(element => {
+    element.textContent = refreshCountdownText();
+  });
   if (seconds <= 0 && !refreshInFlight) {
     load();
   }
@@ -473,6 +484,11 @@ cards.addEventListener('click', event => {
   if (!button) return;
   const card = button.closest('.card');
   const open = !card.classList.contains('final-open');
+  if (open) {
+    openFinalCities.add(button.dataset.finalCity);
+  } else {
+    openFinalCities.delete(button.dataset.finalCity);
+  }
   card.classList.toggle('final-open', open);
   button.textContent = open ? 'Hide Final Read' : 'Final Minutes Mode';
 });
