@@ -154,15 +154,16 @@ p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
 .good .badge { background: var(--good-bg); color: var(--good); }
 .bad .badge { background: var(--bad-bg); color: var(--bad); }
 .finalToggle {
-  background: rgba(69, 200, 216, 0.10);
-  border: 1px solid var(--line);
+  background: linear-gradient(135deg, rgba(69, 200, 216, 0.18), rgba(86, 212, 148, 0.12));
+  border: 1px solid rgba(69, 200, 216, 0.42);
   border-radius: 999px;
-  color: var(--accent);
+  color: var(--ink);
   cursor: pointer;
   font: inherit;
   font-size: 12px;
-  font-weight: 800;
-  padding: 7px 10px;
+  font-weight: 900;
+  min-height: 38px;
+  padding: 9px 12px;
   white-space: nowrap;
 }
 .finalToggle:hover { border-color: var(--accent); }
@@ -331,6 +332,7 @@ p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
   .metrics { grid-template-columns: 1fr; }
   .card-head { display: block; }
   .cardActions { align-items: flex-start; margin-top: 10px; }
+  .finalToggle { border-radius: 8px; width: 100%; }
   .liveMeterGrid { grid-template-columns: 1fr; }
   .finalGrid { grid-template-columns: 1fr; }
 }
@@ -490,7 +492,7 @@ function render(payload) {
           </div>
           <div class="cardActions">
             <span class="badge">${escapeHtml(city.reachability_label || 'n/a')}</span>
-            <button class="finalToggle" type="button" data-final-city="${escapeAttribute(city.city)}">${openFinalCities.has(city.city) ? 'Hide Final Read' : 'Final Minutes Mode'}</button>
+            <button class="finalToggle" type="button" data-final-city="${escapeAttribute(city.city)}">${openFinalCities.has(city.city) ? 'Hide Live Temp Meter' : 'Open Live Temp Meter'}</button>
           </div>
         </div>
         ${finalMinutesPanel(city)}
@@ -643,7 +645,7 @@ cards.addEventListener('click', event => {
     openFinalCities.delete(button.dataset.finalCity);
   }
   card.classList.toggle('final-open', open);
-  button.textContent = open ? 'Hide Final Read' : 'Final Minutes Mode';
+  button.textContent = open ? 'Hide Live Temp Meter' : 'Open Live Temp Meter';
   if (open) refreshTempMeter(button.dataset.finalCity);
 });
 

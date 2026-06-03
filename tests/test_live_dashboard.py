@@ -223,7 +223,7 @@ class LiveDashboardAppTests(unittest.TestCase):
 
         html = live_app._dashboard_html()
 
-        self.assertIn("Final Minutes Mode", html)
+        self.assertIn("Open Live Temp Meter", html)
         self.assertIn("Live Temp Meter", html)
         self.assertIn("setInterval(refreshOpenTempMeters, 3000)", html)
         self.assertIn("/api/temp-meter?city=", html)
