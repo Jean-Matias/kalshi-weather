@@ -1,0 +1,153 @@
+import os
+import unittest
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
+
+from fastapi.testclient import TestClient
+
+from live_dashboard import (
+    LiveDashboardCache,
+    build_city_payload,
+    favorite_buckets,
+    selected_live_city_configs,
+)
+
+
+class LiveDashboardServiceTests(unittest.TestCase):
+    def test_selected_live_city_configs_only_returns_three_pattern_cities(self):
+        cities = [config["city"] for config in selected_live_city_configs()]
+
+        self.assertEqual(cities, ["Phoenix", "Las Vegas", "San Antonio"])
+
+    def test_favorite_buckets_returns_winner_and_second_by_yes_price(self):
+        market = {
+            "contracts": [
+                {"label": "106F to 107F", "yes_price": 40},
+                {"label": "107F to 108F", "yes_price": 65},
+                {"label": "105F or below", "yes_price": 20},
+            ]
+        }
+
+        top, second = favorite_buckets(market)
+
+        self.assertEqual(top["label"], "107F to 108F")
+        self.assertEqual(second["label"], "106F to 107F")
+
+    def test_build_city_payload_includes_weather_market_and_decision_fields(self):
+        config = {"city": "Phoenix"}
+        weather = {
+            "city": "Phoenix",
+            "station_id": "KPHX",
+            "station_name": "Phoenix Sky Harbor",
+            "official_location": "Phoenix, AZ",
+            "official_climate_product": "CLIPHX",
+            "market_date": "2026-06-03",
+            "settlement_source_status": "cli_wrong_date",
+            "analysis_source_status": "same_day_station_observations",
+            "forecast_source_status": "same_day_hourly_forecast",
+            "forecast_source_url": "forecast-url",
+            "forecast_graph_url": "graph-url",
+            "forecast_generated_at": "2026-06-03T04:00:00-07:00",
+            "forecast_high_time": "2026-06-03T17:00:00-07:00",
+            "market_day_state": "today",
+            "cli_high_f": None,
+            "cli_report_issued": None,
+            "cli_source_url": "cli-url",
+            "latest_observation_time": "2026-06-03T18:00:00+00:00",
+            "market_local_time": "2026-06-03T12:00:00-07:00",
+            "active_heating_window": True,
+            "current_temp_f": 100.0,
+            "raw_high_so_far_f": 100.4,
+            "high_so_far_f": 100.0,
+            "heating_rate_f_per_hour": 2.0,
+            "forecast_high_f": 106.0,
+            "threshold_f": 100.0,
+            "warnings": ["weather warning"],
+        }
+        market = {
+            "market_title": "Highest temperature in Phoenix",
+            "contract_title": "107F to 108F",
+            "range_low_f": 107.0,
+            "range_high_f": 108.0,
+            "kalshi_price": 68,
+            "implied_probability": 0.68,
+            "bid": 67,
+            "ask": 68,
+            "contracts": [
+                {"label": "107F to 108F", "yes_price": 68, "yes_bid": 67},
+                {"label": "105F to 106F", "yes_price": 30, "yes_bid": 28},
+            ],
+            "api_crowd_favorite": "107F to 108F",
+            "api_crowd_price": 68,
+            "market_data_source": "kalshi_api",
+            "warnings": ["market warning"],
+        }
+
+        payload = build_city_payload(config, weather, market)
+
+        self.assertEqual(payload["city"], "Phoenix")
+        self.assertEqual(payload["winning_bucket"]["label"], "107F to 108F")
+        self.assertEqual(payload["second_bucket"]["label"], "105F to 106F")
+        self.assertEqual(payload["current_temp_f"], 100.0)
+        self.assertEqual(payload["forecast_high_f"], 106.0)
+        self.assertEqual(payload["reachability_label"], "UNLIKELY")
+        self.assertTrue(payload["false_pump_warning"])
+        self.assertEqual(payload["warnings"], ["weather warning", "market warning"])
+
+    def test_cache_prevents_refetch_inside_ttl(self):
+        calls = {"count": 0}
+
+        def fetcher():
+            calls["count"] += 1
+            return {"cities": [], "generated": calls["count"]}
+
+        now = datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc)
+        cache = LiveDashboardCache(ttl_seconds=60, fetcher=fetcher, clock=lambda: now)
+
+        first = cache.get()
+        second = cache.get()
+
+        self.assertEqual(first["generated"], 1)
+        self.assertEqual(second["generated"], 1)
+        self.assertEqual(calls["count"], 1)
+
+        later = now + timedelta(seconds=61)
+        cache.clock = lambda: later
+        third = cache.get()
+
+        self.assertEqual(third["generated"], 2)
+        self.assertEqual(calls["count"], 2)
+
+
+class LiveDashboardAppTests(unittest.TestCase):
+    def test_password_protects_dashboard_and_api(self):
+        with patch.dict(os.environ, {"LIVE_DASHBOARD_PASSWORD": "secret"}, clear=False):
+            import live_app
+
+            live_app.live_cache.value = {"cities": [], "last_updated": "now", "next_refresh_eta": "soon"}
+            client = TestClient(live_app.app)
+
+            self.assertEqual(client.get("/").status_code, 401)
+            self.assertEqual(client.get("/api/live").status_code, 401)
+
+            response = client.post("/login", data={"password": "secret"}, follow_redirects=False)
+            self.assertEqual(response.status_code, 303)
+            cookie = response.cookies.get("kalshi_live_session")
+            self.assertIsNotNone(cookie)
+
+            authed = client.get("/api/live", cookies={"kalshi_live_session": cookie})
+            self.assertEqual(authed.status_code, 200)
+            self.assertEqual(authed.json()["cities"], [])
+
+    def test_health_route_is_public(self):
+        import live_app
+
+        client = TestClient(live_app.app)
+        response = client.get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "ok")
+
+
+if __name__ == "__main__":
+    unittest.main()

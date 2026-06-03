@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Phoenix Live Temperature</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f5f7fa;
+  --panel: #ffffff;
+  --text: #17202a;
+  --muted: #66758a;
+  --line: #d7dee8;
+  --hot: #b42318;
+  --warm: #9a6700;
+  --good: #13795b;
+  --kalshi: #1b64a0;
+  --ink: #24364b;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: Arial, Helvetica, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+.shell { max-width: 1120px; margin: 0 auto; padding: 22px; }
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+h1 { margin: 0; font-size: 30px; letter-spacing: 0; }
+p { margin: 6px 0 0; color: var(--muted); line-height: 1.4; }
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(130px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.stat, .panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.stat { padding: 12px; }
+.stat span { display: block; color: var(--muted); font-size: 12px; }
+.stat strong { display: block; margin-top: 4px; font-size: 24px; color: var(--ink); }
+.panel { padding: 16px; margin-bottom: 14px; }
+.chart-wrap {
+  height: min(62vh, 560px);
+  min-height: 360px;
+}
+canvas { width: 100%; height: 100%; display: block; }
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 10px;
+}
+.legend b { color: var(--text); }
+.log {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 10px;
+}
+.log div {
+  padding: 10px;
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.log span { color: var(--muted); font-size: 12px; display: block; }
+.log strong { font-size: 16px; overflow-wrap: anywhere; }
+.warn { color: var(--warm); }
+.good { color: var(--good); }
+.bad { color: var(--hot); }
+.kalshi { color: var(--kalshi); }
+@media (max-width: 760px) {
+  .topbar { display: block; }
+  .status-grid, .log { grid-template-columns: 1fr; }
+  .shell { padding: 14px; }
+}
+</style>
+</head>
+<body>
+<main class="shell">
+<section class="topbar">
+<div>
+<h1>Phoenix Live Temperature</h1>
+<p>Phoenix Sky Harbor International Airport (KPHX). Polls official NWS station observations every 60 seconds. Research only.</p>
+</div>
+<p>Market date: <strong>2026-05-28</strong><br>Timezone: <strong>America/Phoenix</strong></p>
+</section>
+<section class="status-grid">
+<div class="stat"><span>Current Temp</span><strong id="current-temp">loading</strong></div>
+<div class="stat"><span>High so far</span><strong id="high-so-far">loading</strong></div>
+<div class="stat"><span>Latest Obs</span><strong id="latest-obs">loading</strong></div>
+<div class="stat"><span>93-94 Status</span><strong id="bucket-status">loading</strong></div>
+<div class="stat"><span>Kalshi implied high</span><strong id="kalshi-implied">loading</strong></div>
+<div class="stat"><span>Kalshi favorite</span><strong id="kalshi-favorite">loading</strong></div>
+</section>
+<section class="panel">
+<div class="chart-wrap"><canvas id="temp-chart"></canvas></div>
+<div class="legend">
+<span><b>Black line:</b> KPHX observed temperature</span>
+<span><b class="warn">Orange:</b> 93F bucket entry</span>
+<span><b class="bad">Red:</b> 94F bucket top</span>
+<span><b class="good">Green:</b> high so far</span>
+<span><b class="kalshi">Blue:</b> Kalshi price-implied high</span>
+</div>
+</section>
+<section class="panel">
+<div class="log">
+<div><span>Data source</span><strong>https://api.weather.gov/stations/KPHX/observations/latest</strong></div>
+<div><span>History source</span><strong>https://api.weather.gov/stations/KPHX/observations?start=...&amp;end=...&amp;limit=500</strong></div>
+<div><span>Kalshi source</span><strong>https://external-api.kalshi.com/trade-api/v2/events/KXHIGHTPHX-26MAY28</strong></div>
+<div><span>Last refresh</span><strong id="last-refresh">loading</strong></div>
+<div><span>Message</span><strong id="message">Starting live monitor</strong></div>
+</div>
+</section>
+</main>
+<script>
+const stationId = "KPHX";
+const marketDate = "2026-05-28";
+const tz = "America/Phoenix";
+const latestUrl = "https://api.weather.gov/stations/KPHX/observations/latest";
+const historyBaseUrl = "https://api.weather.gov/stations/KPHX/observations?";
+const kalshiUrl = "https://external-api.kalshi.com/trade-api/v2/events/KXHIGHTPHX-26MAY28";
+const canvas = document.getElementById("temp-chart");
+const ctx = canvas.getContext("2d");
+
+function cToF(value) {
+  if (value === null || value === undefined) return null;
+  return Math.round((value * 9 / 5 + 32) * 10) / 10;
+}
+
+function localMarketWindow() {
+  const start = new Date(`${marketDate}T00:00:00-07:00`);
+  const end = new Date(`${marketDate}T23:59:59-07:00`);
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+
+async function fetchJson(url) {
+  const response = await fetch(url, { headers: { "Accept": "application/geo+json, application/json" } });
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+  return response.json();
+}
+
+function formatTemp(value) {
+  return value === null || value === undefined ? "n/a" : `${value.toFixed(1)}F`;
+}
+
+function formatTime(value) {
+  if (!value) return "n/a";
+  return new Intl.DateTimeFormat([], {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: tz
+  }).format(new Date(value));
+}
+
+function bucketStatus(high) {
+  if (high === null || high === undefined) return "unknown";
+  if (high < 93) return "Below 93F";
+  if (high <= 94) return "In 93-94";
+  return "Above 94F";
+}
+
+function resizeCanvas() {
+  const ratio = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = Math.max(640, Math.floor(rect.width * ratio));
+  canvas.height = Math.max(320, Math.floor(rect.height * ratio));
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+}
+
+function chartBounds(points) {
+  const temps = points.map(point => point.temp).filter(value => value !== null);
+  if (window.lastKalshi?.expectedTemp) temps.push(window.lastKalshi.expectedTemp);
+  temps.push(90, 93, 94);
+  const min = Math.floor(Math.min(...temps) - 2);
+  const max = Math.ceil(Math.max(...temps) + 2);
+  return { min, max };
+}
+
+function drawBucketLine(ctx, chart, value, color, label) {
+  const y = chart.y(value);
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([6, 5]);
+  ctx.beginPath();
+  ctx.moveTo(chart.left, y);
+  ctx.lineTo(chart.right, y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = color;
+  ctx.font = "12px Arial";
+  ctx.fillText(label, chart.left + 8, y - 6);
+  ctx.restore();
+}
+
+function drawKalshiLine(ctx, chart, value, label) {
+  if (value === null || value === undefined || Number.isNaN(value)) return;
+  const y = chart.y(value);
+  ctx.save();
+  ctx.strokeStyle = "#1b64a0";
+  ctx.lineWidth = 2;
+  ctx.setLineDash([3, 4]);
+  ctx.beginPath();
+  ctx.moveTo(chart.left, y);
+  ctx.lineTo(chart.right, y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = "#1b64a0";
+  ctx.font = "12px Arial";
+  ctx.fillText(label, chart.left + 8, y + 16);
+  ctx.restore();
+}
+
+function drawChart(points) {
+  resizeCanvas();
+  const rect = canvas.getBoundingClientRect();
+  ctx.clearRect(0, 0, rect.width, rect.height);
+  const margin = { left: 48, right: 18, top: 18, bottom: 34 };
+  const right = rect.width - margin.right;
+  const bottom = rect.height - margin.bottom;
+  const bounds = chartBounds(points);
+  const start = points[0]?.time?.getTime() || Date.now() - 1;
+  const end = points[points.length - 1]?.time?.getTime() || Date.now();
+  const span = Math.max(1, end - start);
+  const chart = {
+    left: margin.left,
+    right,
+    top: margin.top,
+    bottom,
+    x: time => margin.left + ((time.getTime() - start) / span) * (right - margin.left),
+    y: temp => bottom - ((temp - bounds.min) / (bounds.max - bounds.min)) * (bottom - margin.top)
+  };
+
+  ctx.strokeStyle = "#d7dee8";
+  ctx.lineWidth = 1;
+  ctx.font = "12px Arial";
+  ctx.fillStyle = "#66758a";
+  for (let temp = bounds.min; temp <= bounds.max; temp += 2) {
+    const y = chart.y(temp);
+    ctx.beginPath();
+    ctx.moveTo(chart.left, y);
+    ctx.lineTo(chart.right, y);
+    ctx.stroke();
+    ctx.fillText(`${temp}F`, 6, y + 4);
+  }
+
+  drawBucketLine(ctx, chart, 93, "#9a6700", "93F");
+  drawBucketLine(ctx, chart, 94, "#b42318", "94F");
+  const kalshi = window.lastKalshi || null;
+  if (kalshi) drawKalshiLine(ctx, chart, kalshi.expectedTemp, `Kalshi ${kalshi.expectedTemp.toFixed(1)}F`);
+
+  const valid = points.filter(point => point.temp !== null);
+  ctx.strokeStyle = "#17202a";
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  valid.forEach((point, index) => {
+    const x = chart.x(point.time);
+    const y = chart.y(point.temp);
+    if (index === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  const high = Math.max(...valid.map(point => point.temp));
+  if (Number.isFinite(high)) drawBucketLine(ctx, chart, high, "#13795b", `High ${high.toFixed(1)}F`);
+
+  ctx.fillStyle = "#66758a";
+  if (valid.length) {
+    ctx.fillText(formatTime(valid[0].time), chart.left, rect.height - 10);
+    ctx.fillText(formatTime(valid[valid.length - 1].time), chart.right - 64, rect.height - 10);
+  }
+}
+
+function numberFromValue(value) {
+  if (value === null || value === undefined) return null;
+  const parsed = Number(String(value).replace(",", ""));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function dollarsToCents(value) {
+  const number = numberFromValue(value);
+  return number === null ? null : Math.round(number * 100);
+}
+
+function marketRange(market) {
+  const strikeType = String(market.strike_type || "").toLowerCase();
+  const floor = numberFromValue(market.floor_strike);
+  const cap = numberFromValue(market.cap_strike);
+  if (strikeType === "less" && cap !== null) return { low: null, high: cap - 1, midpoint: cap - 1 };
+  if (strikeType === "greater" && floor !== null) return { low: floor + 1, high: null, midpoint: floor + 1 };
+  if (strikeType === "between" && floor !== null && cap !== null) return { low: floor, high: cap, midpoint: (floor + cap) / 2 };
+  if (floor !== null && cap !== null) return { low: floor, high: cap, midpoint: (floor + cap) / 2 };
+  return null;
+}
+
+function rangeLabel(range) {
+  if (!range) return "unknown";
+  if (range.low === null) return `${range.high.toFixed(0)}F or below`;
+  if (range.high === null) return `${range.low.toFixed(0)}F or above`;
+  return `${range.low.toFixed(0)}F to ${range.high.toFixed(0)}F`;
+}
+
+function parseKalshi(eventPayload) {
+  const contracts = (eventPayload.markets || [])
+    .map(market => {
+      const range = marketRange(market);
+      const price = dollarsToCents(market.yes_ask_dollars || market.last_price_dollars);
+      if (!range || price === null) return null;
+      return { range, price, label: rangeLabel(range), ticker: market.ticker };
+    })
+    .filter(Boolean);
+  const total = contracts.reduce((sum, contract) => sum + contract.price, 0);
+  const expectedTemp = total > 0
+    ? contracts.reduce((sum, contract) => sum + contract.range.midpoint * contract.price, 0) / total
+    : null;
+  const favorite = contracts.reduce((best, contract) => !best || contract.price > best.price ? contract : best, null);
+  return { expectedTemp, favorite, contracts };
+}
+
+function observationsFromHistory(history) {
+  return (history.features || [])
+    .map(feature => {
+      const props = feature.properties || {};
+      return {
+        time: new Date(props.timestamp),
+        temp: cToF(props.temperature?.value)
+      };
+    })
+    .filter(point => point.time instanceof Date && !Number.isNaN(point.time.getTime()))
+    .sort((a, b) => a.time - b.time);
+}
+
+async function refresh() {
+  try {
+    const windowRange = localMarketWindow();
+    const historyUrl = `${historyBaseUrl}start=${encodeURIComponent(windowRange.start)}&end=${encodeURIComponent(windowRange.end)}&limit=500`;
+    const [latest, history, kalshiPayload] = await Promise.all([fetchJson(latestUrl), fetchJson(historyUrl), fetchJson(kalshiUrl)]);
+    const kalshi = parseKalshi(kalshiPayload);
+    window.lastKalshi = kalshi;
+    const latestProps = latest.properties || {};
+    const latestTemp = cToF(latestProps.temperature?.value);
+    const points = observationsFromHistory(history);
+    if (latestTemp !== null && latestProps.timestamp) {
+      const latestTime = new Date(latestProps.timestamp);
+      if (!points.some(point => point.time.getTime() === latestTime.getTime())) {
+        points.push({ time: latestTime, temp: latestTemp });
+      }
+      points.sort((a, b) => a.time - b.time);
+    }
+    const high = points.length ? Math.max(...points.map(point => point.temp).filter(value => value !== null)) : latestTemp;
+    document.getElementById("current-temp").textContent = formatTemp(latestTemp);
+    document.getElementById("high-so-far").textContent = formatTemp(high);
+    document.getElementById("latest-obs").textContent = formatTime(latestProps.timestamp);
+    document.getElementById("bucket-status").textContent = bucketStatus(high);
+    document.getElementById("bucket-status").className = high >= 93 && high <= 94 ? "good" : high > 94 ? "bad" : "warn";
+    document.getElementById("kalshi-implied").textContent = formatTemp(kalshi.expectedTemp);
+    document.getElementById("kalshi-favorite").textContent = kalshi.favorite ? `${kalshi.favorite.label} @ ${kalshi.favorite.price}c` : "n/a";
+    document.getElementById("last-refresh").textContent = new Date().toLocaleTimeString();
+    document.getElementById("message").textContent = `Loaded ${points.length} official observations and ${kalshi.contracts.length} Kalshi contracts.`;
+    drawChart(points);
+  } catch (error) {
+    document.getElementById("message").textContent = `Refresh failed: ${error.message}`;
+  }
+}
+
+window.addEventListener("resize", refresh);
+refresh();
+setInterval(refresh, 60000);
+</script>
+</body>
+</html>
