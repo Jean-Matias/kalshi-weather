@@ -3,10 +3,11 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from live_dashboard import LiveDashboardCache
+from live_dashboard import LiveDashboardCache, LiveTempMeterCache
 
 app = FastAPI(title="Kalshi Weather Live Dashboard")
 live_cache = LiveDashboardCache()
+temp_meter_cache = LiveTempMeterCache()
 
 
 @app.get("/health")
@@ -22,6 +23,11 @@ def dashboard() -> HTMLResponse:
 @app.get("/api/live")
 def api_live() -> JSONResponse:
     return JSONResponse(live_cache.get())
+
+
+@app.get("/api/temp-meter")
+def api_temp_meter(city: str) -> JSONResponse:
+    return JSONResponse(temp_meter_cache.get(city))
 
 
 def _dashboard_html() -> str:
@@ -169,6 +175,37 @@ p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
   padding: 12px;
 }
 .card.final-open .finalPanel { display: block; }
+.liveMeter {
+  background: linear-gradient(135deg, rgba(69, 200, 216, 0.16), rgba(86, 212, 148, 0.08));
+  border: 1px solid rgba(69, 200, 216, 0.36);
+  border-radius: 8px;
+  margin-bottom: 10px;
+  padding: 12px;
+}
+.liveMeterHead {
+  align-items: flex-start;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.liveMeterTitle { color: var(--ink); font-size: 13px; font-weight: 900; text-transform: uppercase; }
+.liveMeterSub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.liveMeterPill {
+  background: rgba(86, 212, 148, 0.14);
+  border: 1px solid rgba(86, 212, 148, 0.35);
+  border-radius: 999px;
+  color: var(--good);
+  font-size: 11px;
+  font-weight: 900;
+  padding: 5px 8px;
+  white-space: nowrap;
+}
+.liveMeterGrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.liveMeterItem { background: rgba(8, 13, 18, 0.62); border: 1px solid var(--line); border-radius: 6px; padding: 9px; }
+.liveMeterItem span { color: var(--muted); display: block; font-size: 10px; font-weight: 800; margin-bottom: 5px; text-transform: uppercase; }
+.liveMeterItem strong { display: block; font-size: 18px; overflow-wrap: anywhere; }
+.liveMeterItem.primary strong { color: var(--good); font-size: 24px; line-height: 1; }
 .finalGrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .finalItem { background: #0c141b; border: 1px solid var(--line); border-radius: 6px; padding: 9px; }
 .finalItem span { color: var(--muted); display: block; font-size: 10px; font-weight: 800; margin-bottom: 5px; text-transform: uppercase; }
@@ -285,6 +322,7 @@ p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
   .summary { grid-template-columns: 1fr; }
   .visualGrid { grid-template-columns: 1fr; }
   .metrics { grid-template-columns: repeat(2, 1fr); }
+  .liveMeterGrid { grid-template-columns: repeat(2, 1fr); }
   .finalGrid { grid-template-columns: repeat(2, 1fr); }
   .supportTop { align-items: flex-start; flex-direction: column; }
 }
@@ -293,6 +331,7 @@ p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
   .metrics { grid-template-columns: 1fr; }
   .card-head { display: block; }
   .cardActions { align-items: flex-start; margin-top: 10px; }
+  .liveMeterGrid { grid-template-columns: 1fr; }
   .finalGrid { grid-template-columns: 1fr; }
 }
 """
@@ -307,6 +346,8 @@ const updatedText = document.getElementById('updatedText');
 let nextRefreshAt = null;
 let refreshInFlight = false;
 const openFinalCities = new Set();
+const tempMeterInFlight = new Set();
+const tempMeterNextPullAt = new Map();
 
 function fmtTemp(value) {
   return value === null || value === undefined ? 'n/a' : `${Number(value).toFixed(1)}F`;
@@ -367,6 +408,13 @@ function recentFeedMax(city) {
     return fmtTemp(city.recent_observation_max_f);
   }
   return fmtTemp(city.raw_high_so_far_f);
+}
+
+function tempMeterCountdown(cityName) {
+  const nextPull = tempMeterNextPullAt.get(cityName);
+  if (!nextPull) return 'starts when opened';
+  const seconds = Math.max(0, Math.ceil((nextPull - Date.now()) / 1000));
+  return seconds > 0 ? `${seconds}s` : 'due now';
 }
 
 function roundedOutcome(city) {
@@ -485,6 +533,7 @@ function render(payload) {
 function finalMinutesPanel(city) {
   return `
     <div class="finalPanel" data-final-panel="${escapeAttribute(city.city)}">
+      ${liveTempMeter(city)}
       <div class="finalGrid">
         <div class="finalItem"><span>Latest Endpoint</span><strong>${fmtTemp(city.latest_endpoint_temp_f ?? city.current_temp_f)}</strong></div>
         <div class="finalItem"><span>Recent Max</span><strong>${recentFeedMax(city)}</strong></div>
@@ -498,6 +547,32 @@ function finalMinutesPanel(city) {
       </div>
       ${city.latest_feed_lag_warning ? `<div class="feedWarning">${escapeHtml(city.latest_feed_lag_note || 'Latest endpoint may be behind the recent observation list.')}</div>` : ''}
       ${recentObservationRows(city)}
+    </div>
+  `;
+}
+
+function liveTempMeter(city) {
+  return `
+    <div class="liveMeter" data-meter-city="${escapeAttribute(city.city)}">
+      <div class="liveMeterHead">
+        <div>
+          <div class="liveMeterTitle">Live Temp Meter</div>
+          <div class="liveMeterSub">Temp-only official NWS station check every 3 seconds while this panel is open.</div>
+        </div>
+        <div class="liveMeterPill">3s temp pull</div>
+      </div>
+      <div class="liveMeterGrid">
+        <div class="liveMeterItem primary"><span>Latest Temp</span><strong data-meter-field="current">${fmtTemp(city.latest_endpoint_temp_f ?? city.current_temp_f)}</strong></div>
+        <div class="liveMeterItem"><span>Recent Max</span><strong data-meter-field="recentMax">${recentFeedMax(city)}</strong></div>
+        <div class="liveMeterItem"><span>Rounded Now</span><strong data-meter-field="rounded">${escapeHtml(roundedOutcome(city))}</strong></div>
+        <div class="liveMeterItem"><span>Meter Refresh</span><strong data-meter-field="countdown">${escapeHtml(tempMeterCountdown(city.city))}</strong></div>
+        <div class="liveMeterItem"><span>Latest Time ET</span><strong data-meter-field="endpointTime">${escapeHtml(fmtEtTime(city.latest_endpoint_time))}</strong></div>
+        <div class="liveMeterItem"><span>Feed Time ET</span><strong data-meter-field="feedTime">${escapeHtml(fmtEtTime(city.latest_history_time || city.latest_observation_time))}</strong></div>
+        <div class="liveMeterItem"><span>Last Obs Age</span><strong data-meter-field="age" data-meter-obs-time="${escapeAttribute(city.latest_history_time || city.latest_observation_time || '')}">${escapeHtml(lastObsAge({latest_observation_time: city.latest_history_time || city.latest_observation_time}))}</strong></div>
+        <div class="liveMeterItem"><span>Status</span><strong data-meter-field="status">ready</strong></div>
+      </div>
+      <div data-meter-field="warning">${city.latest_feed_lag_warning ? `<div class="feedWarning">${escapeHtml(city.latest_feed_lag_note || '')}</div>` : ''}</div>
+      <div data-meter-field="feedRows">${recentObservationRows(city)}</div>
     </div>
   `;
 }
@@ -533,6 +608,10 @@ function updateCountdown() {
   document.querySelectorAll('.finalRefreshCountdown').forEach(element => {
     element.textContent = refreshCountdownText();
   });
+  document.querySelectorAll('[data-meter-field="countdown"]').forEach(element => {
+    const meter = element.closest('.liveMeter');
+    element.textContent = meter ? tempMeterCountdown(meter.dataset.meterCity) : 'n/a';
+  });
   if (seconds <= 0 && !refreshInFlight) {
     load();
   }
@@ -548,6 +627,9 @@ function updatePeakCountdowns() {
   document.querySelectorAll('.peakStatus').forEach(element => {
     element.textContent = peakStatus({forecast_high_time: element.dataset.peakTime});
   });
+  document.querySelectorAll('[data-meter-field="age"]').forEach(element => {
+    element.textContent = lastObsAge({latest_observation_time: element.dataset.meterObsTime});
+  });
 }
 
 cards.addEventListener('click', event => {
@@ -562,7 +644,72 @@ cards.addEventListener('click', event => {
   }
   card.classList.toggle('final-open', open);
   button.textContent = open ? 'Hide Final Read' : 'Final Minutes Mode';
+  if (open) refreshTempMeter(button.dataset.finalCity);
 });
+
+async function refreshTempMeter(cityName) {
+  if (!cityName || !openFinalCities.has(cityName) || tempMeterInFlight.has(cityName)) return;
+  tempMeterInFlight.add(cityName);
+  updateTempMeterStatus(cityName, 'pulling');
+  try {
+    const response = await fetch(`/api/temp-meter?city=${encodeURIComponent(cityName)}`, {cache: 'no-store'});
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = await response.json();
+    updateTempMeter(payload);
+    const refreshSeconds = Number(payload.cache_ttl_seconds || payload.refresh_seconds || 3);
+    tempMeterNextPullAt.set(cityName, Date.now() + refreshSeconds * 1000);
+  } catch (error) {
+    updateTempMeterStatus(cityName, error.message || 'failed');
+    tempMeterNextPullAt.set(cityName, Date.now() + 3000);
+  } finally {
+    tempMeterInFlight.delete(cityName);
+  }
+}
+
+function refreshOpenTempMeters() {
+  openFinalCities.forEach(cityName => refreshTempMeter(cityName));
+}
+
+function updateTempMeter(payload) {
+  const cityName = payload.city;
+  const meter = document.querySelector(`.liveMeter[data-meter-city="${cssEscape(cityName)}"]`);
+  if (!meter) return;
+  setMeterText(meter, 'current', fmtTemp(payload.current_temp_f));
+  setMeterText(meter, 'recentMax', fmtTemp(payload.recent_observation_max_f ?? payload.raw_high_so_far_f));
+  setMeterText(meter, 'rounded', payload.rounded_if_final_now_f === null || payload.rounded_if_final_now_f === undefined ? 'n/a' : `${Number(payload.rounded_if_final_now_f).toFixed(0)}F`);
+  setMeterText(meter, 'endpointTime', fmtEtTime(payload.latest_endpoint_time));
+  setMeterText(meter, 'feedTime', fmtEtTime(payload.latest_history_time));
+  const age = meter.querySelector('[data-meter-field="age"]');
+  if (age) {
+    age.dataset.meterObsTime = payload.latest_history_time || payload.latest_endpoint_time || '';
+    age.textContent = lastObsAge({latest_observation_time: age.dataset.meterObsTime});
+  }
+  setMeterText(meter, 'status', payload.ok ? 'live' : (payload.error || 'unavailable'));
+  const warning = meter.querySelector('[data-meter-field="warning"]');
+  if (warning) {
+    warning.innerHTML = payload.latest_feed_lag_warning ? `<div class="feedWarning">${escapeHtml(payload.latest_feed_lag_note || '')}</div>` : '';
+  }
+  const feedRows = meter.querySelector('[data-meter-field="feedRows"]');
+  if (feedRows) {
+    feedRows.innerHTML = recentObservationRows(payload);
+  }
+}
+
+function updateTempMeterStatus(cityName, status) {
+  const meter = document.querySelector(`.liveMeter[data-meter-city="${cssEscape(cityName)}"]`);
+  if (!meter) return;
+  setMeterText(meter, 'status', status);
+}
+
+function setMeterText(meter, field, text) {
+  const element = meter.querySelector(`[data-meter-field="${field}"]`);
+  if (element) element.textContent = text;
+}
+
+function cssEscape(value) {
+  if (window.CSS && CSS.escape) return CSS.escape(value);
+  return String(value).replace(/["\\\\]/g, '\\\\$&');
+}
 
 function bucketVisual(title, bucket, className) {
   const price = cents(bucket);
@@ -616,6 +763,7 @@ async function load() {
 
 load();
 setInterval(load, 15000);
+setInterval(refreshOpenTempMeters, 3000);
 setInterval(() => {
   updateCountdown();
   updatePeakCountdowns();

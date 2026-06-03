@@ -5,8 +5,10 @@ from fastapi.testclient import TestClient
 
 from live_dashboard import (
     LiveDashboardCache,
+    LiveTempMeterCache,
     build_city_payload,
     favorite_buckets,
+    live_city_config,
     recent_observation_feed_summary,
     selected_live_city_configs,
 )
@@ -17,6 +19,12 @@ class LiveDashboardServiceTests(unittest.TestCase):
         cities = [config["city"] for config in selected_live_city_configs()]
 
         self.assertEqual(cities, ["Phoenix", "Las Vegas", "San Antonio"])
+
+    def test_live_city_config_matches_allowed_city_case_insensitive(self):
+        config = live_city_config("san antonio")
+
+        self.assertIsNotNone(config)
+        self.assertEqual(config["city"], "San Antonio")
 
     def test_favorite_buckets_returns_winner_and_second_by_yes_price(self):
         market = {
@@ -142,6 +150,29 @@ class LiveDashboardServiceTests(unittest.TestCase):
         self.assertEqual(third["generated"], 2)
         self.assertEqual(calls["count"], 2)
 
+    def test_temp_meter_cache_uses_three_second_city_cache(self):
+        calls = {"count": 0}
+
+        def fetcher(city_name):
+            calls["count"] += 1
+            return {"city": city_name, "generated": calls["count"]}
+
+        now = datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc)
+        cache = LiveTempMeterCache(ttl_seconds=3, fetcher=fetcher, clock=lambda: now)
+
+        first = cache.get("Phoenix")
+        second = cache.get("Phoenix")
+
+        self.assertEqual(first["generated"], 1)
+        self.assertEqual(second["generated"], 1)
+        self.assertEqual(calls["count"], 1)
+
+        cache.clock = lambda: now + timedelta(seconds=3)
+        third = cache.get("Phoenix")
+
+        self.assertEqual(third["generated"], 2)
+        self.assertEqual(calls["count"], 2)
+
 
 class LiveDashboardAppTests(unittest.TestCase):
     def test_dashboard_and_api_are_public(self):
@@ -154,6 +185,29 @@ class LiveDashboardAppTests(unittest.TestCase):
         response = client.get("/api/live")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["cities"], [])
+
+    def test_temp_meter_api_returns_city_payload(self):
+        import live_app
+
+        live_app.temp_meter_cache.values = {
+            "phoenix": {
+                "city": "Phoenix",
+                "ok": True,
+                "current_temp_f": 100.0,
+                "recent_observation_max_f": 101.0,
+            }
+        }
+        live_app.temp_meter_cache.fetched_at = {
+            "phoenix": datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc)
+        }
+        live_app.temp_meter_cache.clock = lambda: datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc)
+        client = TestClient(live_app.app)
+
+        response = client.get("/api/temp-meter?city=Phoenix")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["city"], "Phoenix")
+        self.assertEqual(response.json()["cache_ttl_seconds"], 3)
 
     def test_dashboard_script_auto_refreshes_when_countdown_expires(self):
         import live_app
@@ -170,6 +224,9 @@ class LiveDashboardAppTests(unittest.TestCase):
         html = live_app._dashboard_html()
 
         self.assertIn("Final Minutes Mode", html)
+        self.assertIn("Live Temp Meter", html)
+        self.assertIn("setInterval(refreshOpenTempMeters, 3000)", html)
+        self.assertIn("/api/temp-meter?city=", html)
         self.assertIn("Latest Endpoint", html)
         self.assertIn("Recent Max", html)
         self.assertIn("Recent NWS station feed", html)

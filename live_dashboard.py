@@ -7,15 +7,24 @@ from config import CITY_CONFIGS
 from decision_layer import enrich_decision_layer
 from kalshi_api import fetch_kalshi_api_observation
 from scoring import score_market
-from weather_sources import fetch_weather
+from weather_sources import fetch_nws_latest_observation, fetch_nws_observation_history, fetch_weather
 
 LIVE_CITY_NAMES = ("Phoenix", "Las Vegas", "San Antonio")
 DEFAULT_CACHE_TTL_SECONDS = 60
+LIVE_TEMP_METER_TTL_SECONDS = 3
 
 
 def selected_live_city_configs() -> list[dict[str, Any]]:
     wanted = set(LIVE_CITY_NAMES)
     return [config for config in CITY_CONFIGS if config["city"] in wanted]
+
+
+def live_city_config(city_name: str) -> dict[str, Any] | None:
+    normalized = city_name.strip().lower()
+    for config in selected_live_city_configs():
+        if config["city"].lower() == normalized:
+            return config
+    return None
 
 
 def favorite_buckets(market: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
@@ -125,6 +134,53 @@ def collect_live_payload() -> dict[str, Any]:
     }
 
 
+def collect_live_temp_meter(city_name: str) -> dict[str, Any]:
+    city_config = live_city_config(city_name)
+    generated_at = _now_utc()
+    if not city_config:
+        return {
+            "generated_at": generated_at.isoformat(),
+            "city": city_name,
+            "ok": False,
+            "error": "City is not available on this live dashboard.",
+            "refresh_seconds": LIVE_TEMP_METER_TTL_SECONDS,
+        }
+
+    warnings: list[str] = []
+    weather: dict[str, Any] = {"station_id": city_config.get("station_id")}
+    try:
+        weather.update(fetch_nws_latest_observation(city_config["station_id"]))
+    except Exception as exc:
+        warnings.append(f"NWS latest observation unavailable: {exc}")
+    try:
+        weather.update(fetch_nws_observation_history(city_config))
+    except Exception as exc:
+        warnings.append(f"NWS observation history unavailable: {exc}")
+
+    feed_summary = recent_observation_feed_summary(weather)
+    raw_high = weather.get("raw_high_so_far_f")
+    rounded_high = weather.get("high_so_far_f")
+    return {
+        "generated_at": generated_at.isoformat(),
+        "city": city_config["city"],
+        "station_id": city_config.get("station_id"),
+        "ok": True,
+        "current_temp_f": weather.get("current_temp_f"),
+        "latest_endpoint_time": weather.get("observation_time"),
+        "raw_high_so_far_f": raw_high,
+        "high_so_far_f": rounded_high,
+        "rounded_if_final_now_f": rounded_high,
+        "recent_observation_points": feed_summary["recent_observation_points"],
+        "recent_observation_max_f": feed_summary["recent_observation_max_f"],
+        "latest_history_temp_f": feed_summary["latest_history_temp_f"],
+        "latest_history_time": feed_summary["latest_history_time"],
+        "latest_feed_lag_warning": feed_summary["latest_feed_lag_warning"],
+        "latest_feed_lag_note": feed_summary["latest_feed_lag_note"],
+        "warnings": warnings,
+        "refresh_seconds": LIVE_TEMP_METER_TTL_SECONDS,
+    }
+
+
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -154,6 +210,33 @@ class LiveDashboardCache:
     def _with_cache_metadata(self, now: datetime) -> dict[str, Any]:
         payload = dict(self.value or {})
         next_refresh = (self.fetched_at or now) + timedelta(seconds=self.ttl_seconds)
+        payload["cache_ttl_seconds"] = self.ttl_seconds
+        payload["next_refresh_eta"] = next_refresh.isoformat()
+        return payload
+
+
+class LiveTempMeterCache:
+    def __init__(
+        self,
+        ttl_seconds: int = LIVE_TEMP_METER_TTL_SECONDS,
+        fetcher: Callable[[str], dict[str, Any]] = collect_live_temp_meter,
+        clock: Callable[[], datetime] = _now_utc,
+    ) -> None:
+        self.ttl_seconds = ttl_seconds
+        self.fetcher = fetcher
+        self.clock = clock
+        self.values: dict[str, dict[str, Any]] = {}
+        self.fetched_at: dict[str, datetime] = {}
+
+    def get(self, city_name: str) -> dict[str, Any]:
+        now = self.clock()
+        key = city_name.strip().lower()
+        fetched_at = self.fetched_at.get(key)
+        if key not in self.values or fetched_at is None or now - fetched_at >= timedelta(seconds=self.ttl_seconds):
+            self.values[key] = self.fetcher(city_name)
+            self.fetched_at[key] = now
+        payload = dict(self.values[key])
+        next_refresh = self.fetched_at[key] + timedelta(seconds=self.ttl_seconds)
         payload["cache_ttl_seconds"] = self.ttl_seconds
         payload["next_refresh_eta"] = next_refresh.isoformat()
         return payload
