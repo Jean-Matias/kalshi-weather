@@ -143,9 +143,36 @@ p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
 .card-main { padding: 18px; }
 .card h2 { margin: 0; font-size: 24px; line-height: 1.05; }
 .card-head { display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; }
+.cardActions { align-items: flex-end; display: flex; flex-direction: column; gap: 8px; }
 .badge { border-radius: 999px; padding: 6px 10px; font-size: 12px; font-weight: 800; background: var(--warn-bg); color: var(--warn); white-space: nowrap; }
 .good .badge { background: var(--good-bg); color: var(--good); }
 .bad .badge { background: var(--bad-bg); color: var(--bad); }
+.finalToggle {
+  background: rgba(69, 200, 216, 0.10);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 7px 10px;
+  white-space: nowrap;
+}
+.finalToggle:hover { border-color: var(--accent); }
+.finalPanel {
+  background: rgba(69, 200, 216, 0.07);
+  border: 1px solid rgba(69, 200, 216, 0.30);
+  border-radius: 8px;
+  display: none;
+  margin-top: 14px;
+  padding: 12px;
+}
+.card.final-open .finalPanel { display: block; }
+.finalGrid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+.finalItem { background: #0c141b; border: 1px solid var(--line); border-radius: 6px; padding: 9px; }
+.finalItem span { color: var(--muted); display: block; font-size: 10px; font-weight: 800; margin-bottom: 5px; text-transform: uppercase; }
+.finalItem strong { display: block; font-size: 15px; overflow-wrap: anywhere; }
 .visualGrid { display: grid; grid-template-columns: minmax(260px, 0.85fr) 1.15fr; gap: 14px; margin-top: 16px; }
 .marketPanel, .tempPanel {
   background: var(--panel-soft);
@@ -226,11 +253,15 @@ p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
   .summary { grid-template-columns: 1fr; }
   .visualGrid { grid-template-columns: 1fr; }
   .metrics { grid-template-columns: repeat(2, 1fr); }
+  .finalGrid { grid-template-columns: repeat(2, 1fr); }
   .supportTop { align-items: flex-start; flex-direction: column; }
 }
 @media (max-width: 560px) {
   .shell { padding: 14px; }
   .metrics { grid-template-columns: 1fr; }
+  .card-head { display: block; }
+  .cardActions { align-items: flex-start; margin-top: 10px; }
+  .finalGrid { grid-template-columns: 1fr; }
 }
 """
 
@@ -277,6 +308,36 @@ function peakCountdownFromIso(isoValue) {
   const peak = new Date(isoValue);
   if (Number.isNaN(peak.getTime())) return 'n/a';
   return fmtDuration(peak.getTime() - Date.now());
+}
+
+function lastObsAge(city) {
+  if (!city.latest_observation_time) return 'n/a';
+  const observed = new Date(city.latest_observation_time);
+  if (Number.isNaN(observed.getTime())) return 'n/a';
+  return fmtDuration(observed.getTime() - Date.now());
+}
+
+function roundedOutcome(city) {
+  return city.high_so_far_f === null || city.high_so_far_f === undefined ? 'n/a' : `${Number(city.high_so_far_f).toFixed(0)}F`;
+}
+
+function nextRoundDistance(city) {
+  const rawHigh = Number(city.raw_high_so_far_f);
+  if (!Number.isFinite(rawHigh)) return 'n/a';
+  const currentRounded = Math.round(rawHigh);
+  const nextThreshold = currentRounded + 0.5;
+  const needed = Math.max(0, nextThreshold - rawHigh);
+  return `+${needed.toFixed(1)}F to ${currentRounded + 1}F`;
+}
+
+function peakStatus(city) {
+  if (!city.forecast_high_time) return 'n/a';
+  const peak = new Date(city.forecast_high_time);
+  if (Number.isNaN(peak.getTime())) return 'n/a';
+  const deltaMinutes = (peak.getTime() - Date.now()) / 60000;
+  if (deltaMinutes > 60) return 'Before peak';
+  if (deltaMinutes >= -60) return 'Peak watch';
+  return 'Past peak';
 }
 
 function cents(bucket) {
@@ -327,8 +388,12 @@ function render(payload) {
             <h2>${escapeHtml(city.city)}</h2>
             <p>${escapeHtml(city.station_id || '')} | ${escapeHtml(city.market_date || '')}</p>
           </div>
-          <span class="badge">${escapeHtml(city.reachability_label || 'n/a')}</span>
+          <div class="cardActions">
+            <span class="badge">${escapeHtml(city.reachability_label || 'n/a')}</span>
+            <button class="finalToggle" type="button" data-final-city="${escapeAttribute(city.city)}">Final Minutes Mode</button>
+          </div>
         </div>
+        ${finalMinutesPanel(city)}
         <div class="visualGrid">
           <div class="marketPanel">
             <div class="panelTitle">Kalshi board</div>
@@ -365,6 +430,20 @@ function render(payload) {
   `).join('');
 }
 
+function finalMinutesPanel(city) {
+  return `
+    <div class="finalPanel" data-final-panel="${escapeAttribute(city.city)}">
+      <div class="finalGrid">
+        <div class="finalItem"><span>Official Temp Now</span><strong>${fmtTemp(city.current_temp_f)}</strong></div>
+        <div class="finalItem"><span>If Final Now</span><strong>${escapeHtml(roundedOutcome(city))}</strong></div>
+        <div class="finalItem"><span>Next Round Risk</span><strong>${escapeHtml(nextRoundDistance(city))}</strong></div>
+        <div class="finalItem"><span>Last Obs</span><strong class="obsAge" data-obs-time="${escapeAttribute(city.latest_observation_time || '')}">${escapeHtml(lastObsAge(city))}</strong></div>
+        <div class="finalItem"><span>Peak Status</span><strong class="peakStatus" data-peak-time="${escapeAttribute(city.forecast_high_time || '')}">${escapeHtml(peakStatus(city))}</strong></div>
+      </div>
+    </div>
+  `;
+}
+
 function updateCountdown() {
   if (!nextRefreshAt || Number.isNaN(nextRefreshAt.getTime())) {
     updatedText.textContent = 'waiting';
@@ -381,7 +460,22 @@ function updatePeakCountdowns() {
   document.querySelectorAll('.peakCountdown').forEach(element => {
     element.textContent = peakCountdownFromIso(element.dataset.peakTime);
   });
+  document.querySelectorAll('.obsAge').forEach(element => {
+    element.textContent = lastObsAge({latest_observation_time: element.dataset.obsTime});
+  });
+  document.querySelectorAll('.peakStatus').forEach(element => {
+    element.textContent = peakStatus({forecast_high_time: element.dataset.peakTime});
+  });
 }
+
+cards.addEventListener('click', event => {
+  const button = event.target.closest('.finalToggle');
+  if (!button) return;
+  const card = button.closest('.card');
+  const open = !card.classList.contains('final-open');
+  card.classList.toggle('final-open', open);
+  button.textContent = open ? 'Hide Final Read' : 'Final Minutes Mode';
+});
 
 function bucketVisual(title, bucket, className) {
   const price = cents(bucket);

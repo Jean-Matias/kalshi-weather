@@ -138,6 +138,15 @@ class LiveDashboardAppTests(unittest.TestCase):
         self.assertIn("seconds <= 0 && !refreshInFlight", html)
         self.assertIn("load();", html)
 
+    def test_dashboard_has_final_minutes_mode(self):
+        import live_app
+
+        html = live_app._dashboard_html()
+
+        self.assertIn("Final Minutes Mode", html)
+        self.assertIn("Official Temp Now", html)
+        self.assertIn("Next Round Risk", html)
+
     def test_health_route_is_public(self):
         import live_app
 
