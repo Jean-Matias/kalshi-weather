@@ -117,6 +117,11 @@ def _dashboard_html() -> str:
       </div>
     </header>
     <section id="cards" class="cards"></section>
+    <footer class="support">
+      <a href="https://www.buymeacoffee.com/jeanmatias" target="_blank" rel="noopener noreferrer" aria-label="Buy Jean Matias a coffee">
+        <img src="https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=&slug=jeanmatias&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff" alt="Buy me a coffee">
+      </a>
+    </footer>
   </main>
   <script>{_javascript()}</script>
 </body>
@@ -177,6 +182,8 @@ p { margin: 6px 0 0; color: var(--muted); }
 label, input, button { display: block; width: 100%; }
 input, button { margin-top: 8px; padding: 10px; border-radius: 6px; border: 1px solid var(--line); font: inherit; }
 button { background: var(--ink); color: #fff; cursor: pointer; }
+.support { display: flex; justify-content: center; margin-top: 22px; }
+.support img { display: block; height: 42px; max-width: 220px; }
 @media (max-width: 850px) {
   .topbar { display: block; }
   .status { margin-top: 12px; }
