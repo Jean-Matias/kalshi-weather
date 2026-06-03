@@ -242,6 +242,7 @@ const summary = document.getElementById('summary');
 const statusText = document.getElementById('statusText');
 const updatedText = document.getElementById('updatedText');
 let nextRefreshAt = null;
+let refreshInFlight = false;
 
 function fmtTemp(value) {
   return value === null || value === undefined ? 'n/a' : `${Number(value).toFixed(1)}F`;
@@ -371,6 +372,9 @@ function updateCountdown() {
   }
   const seconds = Math.max(0, Math.ceil((nextRefreshAt.getTime() - Date.now()) / 1000));
   updatedText.textContent = seconds > 0 ? `${seconds}s` : 'due now';
+  if (seconds <= 0 && !refreshInFlight) {
+    load();
+  }
 }
 
 function updatePeakCountdowns() {
@@ -415,6 +419,8 @@ function escapeAttribute(value) {
 }
 
 async function load() {
+  if (refreshInFlight) return;
+  refreshInFlight = true;
   try {
     const response = await fetch('/api/live', {cache: 'no-store'});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -422,6 +428,8 @@ async function load() {
   } catch (error) {
     statusText.textContent = 'Live update failed';
     updatedText.textContent = error.message;
+  } finally {
+    refreshInFlight = false;
   }
 }
 

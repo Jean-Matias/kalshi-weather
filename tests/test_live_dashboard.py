@@ -129,6 +129,15 @@ class LiveDashboardAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["cities"], [])
 
+    def test_dashboard_script_auto_refreshes_when_countdown_expires(self):
+        import live_app
+
+        html = live_app._dashboard_html()
+
+        self.assertIn("let refreshInFlight = false", html)
+        self.assertIn("seconds <= 0 && !refreshInFlight", html)
+        self.assertIn("load();", html)
+
     def test_health_route_is_public(self):
         import live_app
 
