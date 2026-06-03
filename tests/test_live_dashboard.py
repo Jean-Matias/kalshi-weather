@@ -7,6 +7,7 @@ from live_dashboard import (
     LiveDashboardCache,
     build_city_payload,
     favorite_buckets,
+    recent_observation_feed_summary,
     selected_live_city_configs,
 )
 
@@ -52,6 +53,11 @@ class LiveDashboardServiceTests(unittest.TestCase):
             "cli_report_issued": None,
             "cli_source_url": "cli-url",
             "latest_observation_time": "2026-06-03T18:00:00+00:00",
+            "observation_time": "2026-06-03T17:55:00+00:00",
+            "recent_observation_points": [
+                {"time": "2026-06-03T17:50:00+00:00", "temp_f": 99.2},
+                {"time": "2026-06-03T18:00:00+00:00", "temp_f": 100.4},
+            ],
             "market_local_time": "2026-06-03T12:00:00-07:00",
             "active_heating_window": True,
             "current_temp_f": 100.0,
@@ -88,9 +94,29 @@ class LiveDashboardServiceTests(unittest.TestCase):
         self.assertEqual(payload["second_bucket"]["label"], "105F to 106F")
         self.assertEqual(payload["current_temp_f"], 100.0)
         self.assertEqual(payload["forecast_high_f"], 106.0)
+        self.assertEqual(payload["latest_endpoint_temp_f"], 100.0)
+        self.assertEqual(payload["recent_observation_max_f"], 100.4)
+        self.assertEqual(payload["latest_history_time"], "2026-06-03T18:00:00+00:00")
+        self.assertTrue(payload["latest_feed_lag_warning"])
         self.assertEqual(payload["reachability_label"], "UNLIKELY")
         self.assertTrue(payload["false_pump_warning"])
         self.assertEqual(payload["warnings"], ["weather warning", "market warning"])
+
+    def test_recent_observation_feed_summary_flags_newer_history(self):
+        weather = {
+            "current_temp_f": 84.2,
+            "observation_time": "2026-06-03T19:25:00+00:00",
+            "recent_observation_points": [
+                {"time": "2026-06-03T19:25:00+00:00", "temp_f": 84.2},
+                {"time": "2026-06-03T19:35:00+00:00", "temp_f": 87.8},
+            ],
+        }
+
+        summary = recent_observation_feed_summary(weather)
+
+        self.assertEqual(summary["recent_observation_max_f"], 87.8)
+        self.assertEqual(summary["latest_history_temp_f"], 87.8)
+        self.assertTrue(summary["latest_feed_lag_warning"])
 
     def test_cache_prevents_refetch_inside_ttl(self):
         calls = {"count": 0}
@@ -144,7 +170,10 @@ class LiveDashboardAppTests(unittest.TestCase):
         html = live_app._dashboard_html()
 
         self.assertIn("Final Minutes Mode", html)
-        self.assertIn("Official Temp Now", html)
+        self.assertIn("Latest Endpoint", html)
+        self.assertIn("Recent Max", html)
+        self.assertIn("Recent NWS station feed", html)
+        self.assertIn("latest_feed_lag_warning", html)
         self.assertIn("Next Round Risk", html)
         self.assertIn("Data Refresh", html)
         self.assertIn("openFinalCities", html)

@@ -38,6 +38,7 @@ def build_city_payload(
     scored = enrich_decision_layer(score_market(city_config["city"], weather, market))
     top, second = favorite_buckets(market)
     warnings = list(weather.get("warnings") or []) + list(market.get("warnings") or [])
+    feed_summary = recent_observation_feed_summary(weather)
     return {
         "city": city_config["city"],
         "station_id": weather.get("station_id"),
@@ -46,6 +47,14 @@ def build_city_payload(
         "winning_bucket": _bucket_payload(top),
         "second_bucket": _bucket_payload(second),
         "current_temp_f": scored.get("current_temp_f"),
+        "latest_endpoint_temp_f": weather.get("current_temp_f"),
+        "latest_endpoint_time": weather.get("observation_time"),
+        "latest_history_temp_f": feed_summary["latest_history_temp_f"],
+        "latest_history_time": feed_summary["latest_history_time"],
+        "recent_observation_points": feed_summary["recent_observation_points"],
+        "recent_observation_max_f": feed_summary["recent_observation_max_f"],
+        "latest_feed_lag_warning": feed_summary["latest_feed_lag_warning"],
+        "latest_feed_lag_note": feed_summary["latest_feed_lag_note"],
         "raw_high_so_far_f": scored.get("raw_high_so_far_f"),
         "high_so_far_f": scored.get("high_so_far_f"),
         "latest_observation_time": scored.get("latest_observation_time"),
@@ -65,6 +74,38 @@ def build_city_payload(
         "forecast_graph_url": scored.get("forecast_graph_url"),
         "kalshi_url": scored.get("kalshi_url"),
         "warnings": warnings,
+    }
+
+
+def recent_observation_feed_summary(weather: dict[str, Any]) -> dict[str, Any]:
+    points = [
+        point
+        for point in weather.get("recent_observation_points") or []
+        if point.get("time") and point.get("temp_f") is not None
+    ]
+    recent_max = None
+    if points:
+        recent_max = round(max(float(point["temp_f"]) for point in points), 1)
+    latest_point = points[-1] if points else {}
+    latest_history_time = latest_point.get("time")
+    latest_history_temp = latest_point.get("temp_f")
+    endpoint_time = weather.get("observation_time")
+    endpoint_temp = weather.get("current_temp_f")
+    history_ahead = _history_is_ahead(endpoint_time, latest_history_time)
+    recent_max_hotter = _recent_max_is_hotter(endpoint_temp, recent_max)
+    warning = history_ahead or recent_max_hotter
+    note = None
+    if history_ahead:
+        note = "Latest endpoint may be behind the recent observation list. Use recent max in final minutes."
+    elif recent_max_hotter:
+        note = "Recent observation history has a hotter official reading than the latest endpoint. Use recent max for bucket checks."
+    return {
+        "recent_observation_points": points,
+        "recent_observation_max_f": recent_max,
+        "latest_history_time": latest_history_time,
+        "latest_history_temp_f": latest_history_temp,
+        "latest_feed_lag_warning": warning,
+        "latest_feed_lag_note": note,
     }
 
 
@@ -130,3 +171,33 @@ def _bucket_payload(contract: dict[str, Any] | None) -> dict[str, Any] | None:
         "high_f": contract.get("high_f"),
         "ticker": contract.get("ticker"),
     }
+
+
+def _history_is_ahead(endpoint_time: Any, history_time: Any) -> bool:
+    endpoint = _parse_iso_time(endpoint_time)
+    history = _parse_iso_time(history_time)
+    if endpoint is None or history is None:
+        return False
+    return history - endpoint >= timedelta(minutes=3)
+
+
+def _recent_max_is_hotter(endpoint_temp: Any, recent_max: Any) -> bool:
+    try:
+        if endpoint_temp is None or recent_max is None:
+            return False
+        return float(recent_max) - float(endpoint_temp) >= 0.5
+    except (TypeError, ValueError):
+        return False
+
+
+def _parse_iso_time(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        text = str(value).replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed

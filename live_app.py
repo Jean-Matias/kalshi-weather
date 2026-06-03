@@ -169,10 +169,42 @@ p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
   padding: 12px;
 }
 .card.final-open .finalPanel { display: block; }
-.finalGrid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+.finalGrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .finalItem { background: #0c141b; border: 1px solid var(--line); border-radius: 6px; padding: 9px; }
 .finalItem span { color: var(--muted); display: block; font-size: 10px; font-weight: 800; margin-bottom: 5px; text-transform: uppercase; }
 .finalItem strong { display: block; font-size: 15px; overflow-wrap: anywhere; }
+.feedWarning {
+  background: var(--warn-bg);
+  border: 1px solid rgba(243, 183, 75, 0.38);
+  border-radius: 6px;
+  color: var(--warn);
+  font-size: 13px;
+  font-weight: 800;
+  margin-top: 10px;
+  padding: 9px;
+}
+.recentFeed {
+  border-top: 1px solid var(--line);
+  margin-top: 10px;
+  padding-top: 10px;
+}
+.recentFeedHeader {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  margin-bottom: 7px;
+  text-transform: uppercase;
+}
+.recentFeedRows { display: flex; flex-wrap: wrap; gap: 7px; }
+.recentPoint {
+  background: #0c141b;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+  padding: 6px 8px;
+}
 .visualGrid { display: grid; grid-template-columns: minmax(260px, 0.85fr) 1.15fr; gap: 14px; margin-top: 16px; }
 .marketPanel, .tempPanel {
   background: var(--panel-soft);
@@ -290,6 +322,18 @@ function fmtPrice(bucket) {
   return `${bucket.label || 'unknown'} @ ${price}`;
 }
 
+function fmtEtTime(value) {
+  if (!value) return 'n/a';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'n/a';
+  return date.toLocaleTimeString([], {
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'America/New_York',
+    timeZoneName: 'short'
+  });
+}
+
 function fmtDuration(ms) {
   if (!Number.isFinite(ms)) return 'n/a';
   const absMs = Math.abs(ms);
@@ -316,6 +360,13 @@ function lastObsAge(city) {
   const observed = new Date(city.latest_observation_time);
   if (Number.isNaN(observed.getTime())) return 'n/a';
   return fmtDuration(observed.getTime() - Date.now());
+}
+
+function recentFeedMax(city) {
+  if (city.recent_observation_max_f !== null && city.recent_observation_max_f !== undefined) {
+    return fmtTemp(city.recent_observation_max_f);
+  }
+  return fmtTemp(city.raw_high_so_far_f);
 }
 
 function roundedOutcome(city) {
@@ -435,12 +486,32 @@ function finalMinutesPanel(city) {
   return `
     <div class="finalPanel" data-final-panel="${escapeAttribute(city.city)}">
       <div class="finalGrid">
-        <div class="finalItem"><span>Official Temp Now</span><strong>${fmtTemp(city.current_temp_f)}</strong></div>
+        <div class="finalItem"><span>Latest Endpoint</span><strong>${fmtTemp(city.latest_endpoint_temp_f ?? city.current_temp_f)}</strong></div>
+        <div class="finalItem"><span>Recent Max</span><strong>${recentFeedMax(city)}</strong></div>
         <div class="finalItem"><span>If Final Now</span><strong>${escapeHtml(roundedOutcome(city))}</strong></div>
         <div class="finalItem"><span>Next Round Risk</span><strong>${escapeHtml(nextRoundDistance(city))}</strong></div>
-        <div class="finalItem"><span>Last Obs</span><strong class="obsAge" data-obs-time="${escapeAttribute(city.latest_observation_time || '')}">${escapeHtml(lastObsAge(city))}</strong></div>
+        <div class="finalItem"><span>Latest Endpoint Time</span><strong>${escapeHtml(fmtEtTime(city.latest_endpoint_time))}</strong></div>
+        <div class="finalItem"><span>Recent Feed Time</span><strong>${escapeHtml(fmtEtTime(city.latest_history_time || city.latest_observation_time))}</strong></div>
+        <div class="finalItem"><span>Last Obs Age</span><strong class="obsAge" data-obs-time="${escapeAttribute(city.latest_history_time || city.latest_observation_time || '')}">${escapeHtml(lastObsAge({latest_observation_time: city.latest_history_time || city.latest_observation_time}))}</strong></div>
         <div class="finalItem"><span>Peak Status</span><strong class="peakStatus" data-peak-time="${escapeAttribute(city.forecast_high_time || '')}">${escapeHtml(peakStatus(city))}</strong></div>
         <div class="finalItem"><span>Data Refresh</span><strong class="finalRefreshCountdown">${escapeHtml(refreshCountdownText())}</strong></div>
+      </div>
+      ${city.latest_feed_lag_warning ? `<div class="feedWarning">${escapeHtml(city.latest_feed_lag_note || 'Latest endpoint may be behind the recent observation list.')}</div>` : ''}
+      ${recentObservationRows(city)}
+    </div>
+  `;
+}
+
+function recentObservationRows(city) {
+  const points = (city.recent_observation_points || []).slice(-6);
+  if (!points.length) return '';
+  return `
+    <div class="recentFeed">
+      <div class="recentFeedHeader">Recent NWS station feed</div>
+      <div class="recentFeedRows">
+        ${points.map(point => `
+          <span class="recentPoint">${escapeHtml(fmtEtTime(point.time))} ${fmtTemp(point.temp_f)}</span>
+        `).join('')}
       </div>
     </div>
   `;
