@@ -52,13 +52,14 @@ def _dashboard_html() -> str:
         </div>
       </div>
     </header>
-    <section id="summary" class="summary"></section>
-    <section id="cards" class="cards"></section>
-    <footer class="support">
+    <section class="supportTop">
+      <span>Do you want to see more cities? A small support goes a long way</span>
       <a href="https://www.buymeacoffee.com/jeanmatias" target="_blank" rel="noopener noreferrer" aria-label="Buy Jean Matias a coffee">
         <img src="https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=&slug=jeanmatias&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff" alt="Buy me a coffee">
       </a>
-    </footer>
+    </section>
+    <section id="summary" class="summary"></section>
+    <section id="cards" class="cards"></section>
   </main>
   <script>{_javascript()}</script>
 </body>
@@ -186,14 +187,46 @@ p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
   padding: 13px 18px;
 }
 .warnings { color: var(--bad); font-size: 13px; margin: 10px 18px 0; }
-.support { display: flex; justify-content: center; margin-top: 22px; }
-.support img { display: block; height: 42px; max-width: 220px; }
+.sourceLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.sourceLinks a {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 800;
+  padding: 6px 9px;
+  text-decoration: none;
+}
+.sourceLinks a:hover { border-color: var(--accent); }
+.supportTop {
+  align-items: center;
+  background: rgba(16, 24, 32, 0.78);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  padding: 11px 14px;
+}
+.supportTop span {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 800;
+}
+.supportTop img { display: block; height: 38px; max-width: 210px; }
 @media (max-width: 850px) {
   .topbar { display: block; }
   .statusDeck { margin-top: 12px; }
   .summary { grid-template-columns: 1fr; }
   .visualGrid { grid-template-columns: 1fr; }
   .metrics { grid-template-columns: repeat(2, 1fr); }
+  .supportTop { align-items: flex-start; flex-direction: column; }
 }
 @media (max-width: 560px) {
   .shell { padding: 14px; }
@@ -222,6 +255,27 @@ function fmtPrice(bucket) {
   if (!bucket) return 'n/a';
   const price = bucket.yes_price === null || bucket.yes_price === undefined ? 'n/a' : `${Number(bucket.yes_price).toFixed(0)}c`;
   return `${bucket.label || 'unknown'} @ ${price}`;
+}
+
+function fmtDuration(ms) {
+  if (!Number.isFinite(ms)) return 'n/a';
+  const absMs = Math.abs(ms);
+  const totalMinutes = Math.round(absMs / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  const text = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+  return ms >= 0 ? `in ${text}` : `${text} ago`;
+}
+
+function peakCountdown(city) {
+  return peakCountdownFromIso(city.forecast_high_time);
+}
+
+function peakCountdownFromIso(isoValue) {
+  if (!isoValue) return 'n/a';
+  const peak = new Date(isoValue);
+  if (Number.isNaN(peak.getTime())) return 'n/a';
+  return fmtDuration(peak.getTime() - Date.now());
 }
 
 function cents(bucket) {
@@ -296,12 +350,13 @@ function render(payload) {
           <div class="metric"><span>High So Far</span><strong>${fmtTemp(city.high_so_far_f)}</strong></div>
           <div class="metric"><span>Raw High</span><strong>${fmtTemp(city.raw_high_so_far_f)}</strong></div>
           <div class="metric"><span>Critical Hour</span><strong>${escapeHtml(city.critical_window_et || 'n/a')}</strong></div>
+          <div class="metric"><span>Peak Countdown</span><strong class="peakCountdown" data-peak-time="${escapeAttribute(city.forecast_high_time || '')}">${escapeHtml(peakCountdown(city))}</strong></div>
           <div class="metric"><span>Market vs Weather</span><strong>${escapeHtml(city.market_weather_alignment || 'n/a')}</strong></div>
           <div class="metric"><span>Heating Pace</span><strong>${fmtRate(city.heating_rate_f_per_hour)}</strong></div>
           <div class="metric"><span>Needed Rate</span><strong>${fmtRate(city.required_rate_f_per_hour)}</strong></div>
           <div class="metric"><span>Degrees Needed</span><strong>${fmtTemp(city.degrees_needed_to_reach_bucket)}</strong></div>
-          <div class="metric"><span>False Pump</span><strong>${city.false_pump_warning ? 'YES' : 'no'}</strong></div>
         </div>
+        ${sourceLinks(city)}
         ${(city.warnings || []).length ? `<p class="warnings">${escapeHtml(city.warnings[0])}</p>` : ''}
       </div>
       <p class="note">${escapeHtml(city.decision_note || '')}</p>
@@ -318,6 +373,12 @@ function updateCountdown() {
   updatedText.textContent = seconds > 0 ? `${seconds}s` : 'due now';
 }
 
+function updatePeakCountdowns() {
+  document.querySelectorAll('.peakCountdown').forEach(element => {
+    element.textContent = peakCountdownFromIso(element.dataset.peakTime);
+  });
+}
+
 function bucketVisual(title, bucket, className) {
   const price = cents(bucket);
   return `
@@ -331,10 +392,26 @@ function bucketVisual(title, bucket, className) {
   `;
 }
 
+function sourceLinks(city) {
+  const links = [
+    city.kalshi_url ? ['Kalshi', city.kalshi_url] : null,
+    city.station_id ? ['NWS Obs', `https://api.weather.gov/stations/${encodeURIComponent(city.station_id)}/observations/latest`] : null,
+    city.forecast_graph_url ? ['NWS Forecast', city.forecast_graph_url] : null
+  ].filter(Boolean);
+  if (!links.length) return '';
+  return `<div class="sourceLinks">${links.map(([label, url]) => `
+    <a href="${escapeAttribute(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>
+  `).join('')}</div>`;
+}
+
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, char => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   })[char]);
+}
+
+function escapeAttribute(value) {
+  return escapeHtml(value).replace(/`/g, '&#96;');
 }
 
 async function load() {
@@ -350,5 +427,8 @@ async function load() {
 
 load();
 setInterval(load, 15000);
-setInterval(updateCountdown, 1000);
+setInterval(() => {
+  updateCountdown();
+  updatePeakCountdowns();
+}, 1000);
 """
