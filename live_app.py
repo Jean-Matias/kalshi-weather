@@ -68,28 +68,31 @@ def _dashboard_html() -> str:
 def _css() -> str:
     return """
 :root {
-  color-scheme: light;
-  --bg: #f6f7f4;
-  --panel: #ffffff;
-  --panel-soft: #f8faf7;
-  --line: #d8dfd6;
-  --ink: #17211b;
-  --muted: #687469;
-  --good: #15724e;
-  --good-bg: #e8f6ee;
-  --warn: #9a6500;
-  --warn-bg: #fff3cf;
-  --bad: #b42318;
-  --bad-bg: #ffe7e2;
-  --accent: #176b78;
-  --shadow: 0 18px 45px rgba(23, 33, 27, 0.10);
+  color-scheme: dark;
+  --bg: #080d12;
+  --panel: #101820;
+  --panel-soft: #0c141b;
+  --line: #243340;
+  --ink: #eef7f3;
+  --muted: #91a3ad;
+  --good: #56d494;
+  --good-bg: rgba(86, 212, 148, 0.14);
+  --warn: #f3b74b;
+  --warn-bg: rgba(243, 183, 75, 0.15);
+  --bad: #ff6b5e;
+  --bad-bg: rgba(255, 107, 94, 0.14);
+  --accent: #45c8d8;
+  --gold: #d49b31;
+  --shadow: 0 22px 60px rgba(0, 0, 0, 0.36);
 }
 * { box-sizing: border-box; }
 body {
   margin: 0;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
   background:
-    linear-gradient(180deg, #eef4ef 0, #f6f7f4 260px),
+    radial-gradient(circle at 12% -10%, rgba(69, 200, 216, 0.24), transparent 34%),
+    radial-gradient(circle at 92% 0%, rgba(212, 155, 49, 0.14), transparent 32%),
+    linear-gradient(180deg, #0d151d 0, #080d12 310px),
     var(--bg);
   color: var(--ink);
 }
@@ -107,10 +110,10 @@ h1 { margin: 0; font-size: 34px; line-height: 1.05; letter-spacing: 0; }
 p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
 .statusDeck { display: grid; grid-template-columns: repeat(2, minmax(126px, 1fr)); gap: 10px; }
 .status {
-  background: var(--panel);
+  background: rgba(16, 24, 32, 0.86);
   border: 1px solid var(--line);
   border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(23, 33, 27, 0.06);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
   min-width: 132px;
   padding: 12px 14px;
 }
@@ -118,7 +121,7 @@ p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
 .status strong { display: block; font-size: 17px; margin-top: 4px; }
 .summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 14px; }
 .summaryItem {
-  background: rgba(255, 255, 255, 0.78);
+  background: rgba(16, 24, 32, 0.78);
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 13px 14px;
@@ -153,15 +156,15 @@ p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
 .bucketRow { display: grid; gap: 6px; margin-bottom: 12px; }
 .bucketTop { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; font-weight: 800; }
 .bucketTop span { color: var(--muted); font-weight: 700; }
-.barTrack { background: #e7ede7; border-radius: 999px; height: 10px; overflow: hidden; }
-.barFill { background: var(--accent); border-radius: inherit; height: 100%; width: 0; }
-.bucketRow.second .barFill { background: #9d7a27; }
+.barTrack { background: #1d2a34; border-radius: 999px; height: 10px; overflow: hidden; }
+.barFill { background: linear-gradient(90deg, #2ca8b8, var(--accent)); border-radius: inherit; height: 100%; width: 0; }
+.bucketRow.second .barFill { background: linear-gradient(90deg, #9d7a27, var(--gold)); }
 .tempRail { margin-top: 8px; }
 .tempLabels { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; font-weight: 700; margin-bottom: 6px; }
-.tempTrack { background: #e7ede7; border-radius: 999px; height: 14px; overflow: hidden; position: relative; }
-.tempFill { background: linear-gradient(90deg, #176b78, #d49228); border-radius: inherit; height: 100%; width: 0; }
+.tempTrack { background: #1d2a34; border-radius: 999px; height: 14px; overflow: hidden; position: relative; }
+.tempFill { background: linear-gradient(90deg, #45c8d8, #d49228); border-radius: inherit; height: 100%; width: 0; }
 .tempMarker {
-  background: var(--ink);
+  background: #f4fbf7;
   border: 2px solid var(--panel);
   border-radius: 999px;
   height: 18px;
@@ -171,11 +174,11 @@ p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
   width: 18px;
 }
 .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 14px; }
-.metric { background: #fff; border: 1px solid var(--line); border-radius: 6px; min-width: 0; padding: 10px; }
+.metric { background: #0c141b; border: 1px solid var(--line); border-radius: 6px; min-width: 0; padding: 10px; }
 .metric span { display: block; color: var(--muted); font-size: 11px; font-weight: 750; margin-bottom: 5px; text-transform: uppercase; }
 .metric strong { display: block; font-size: 17px; overflow-wrap: anywhere; }
 .note {
-  background: #fbfcfa;
+  background: #0c141b;
   border-top: 1px solid var(--line);
   color: var(--ink);
   font-weight: 800;
@@ -205,6 +208,7 @@ const cards = document.getElementById('cards');
 const summary = document.getElementById('summary');
 const statusText = document.getElementById('statusText');
 const updatedText = document.getElementById('updatedText');
+let nextRefreshAt = null;
 
 function fmtTemp(value) {
   return value === null || value === undefined ? 'n/a' : `${Number(value).toFixed(1)}F`;
@@ -256,8 +260,9 @@ function tone(city) {
 
 function render(payload) {
   const updated = payload.last_updated || payload.generated_at || 'unknown';
+  nextRefreshAt = payload.next_refresh_eta ? new Date(payload.next_refresh_eta) : null;
   statusText.textContent = new Date(updated).toLocaleTimeString();
-  updatedText.textContent = `${payload.refresh_seconds || 60}s backend`;
+  updateCountdown();
   renderSummary(payload);
   cards.innerHTML = (payload.cities || []).map(city => `
     <article class="card ${tone(city)}">
@@ -304,6 +309,15 @@ function render(payload) {
   `).join('');
 }
 
+function updateCountdown() {
+  if (!nextRefreshAt || Number.isNaN(nextRefreshAt.getTime())) {
+    updatedText.textContent = 'waiting';
+    return;
+  }
+  const seconds = Math.max(0, Math.ceil((nextRefreshAt.getTime() - Date.now()) / 1000));
+  updatedText.textContent = seconds > 0 ? `${seconds}s` : 'due now';
+}
+
 function bucketVisual(title, bucket, className) {
   const price = cents(bucket);
   return `
@@ -336,4 +350,5 @@ async function load() {
 
 load();
 setInterval(load, 15000);
+setInterval(updateCountdown, 1000);
 """
