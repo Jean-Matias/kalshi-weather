@@ -10,10 +10,9 @@ Install dependencies:
 rtk python -m pip install -r requirements.txt
 ```
 
-Set a password and run:
+Run:
 
 ```powershell
-$env:LIVE_DASHBOARD_PASSWORD="change-me"
 rtk python -m uvicorn live_app:app --host 127.0.0.1 --port 8000 --reload
 ```
 
@@ -41,7 +40,6 @@ cd kalshi-weather
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-export LIVE_DASHBOARD_PASSWORD='change-me'
 uvicorn live_app:app --host 0.0.0.0 --port 8000
 ```
 
@@ -56,7 +54,6 @@ After=network.target
 
 [Service]
 WorkingDirectory=/home/YOUR_USER/kalshi-weather
-Environment=LIVE_DASHBOARD_PASSWORD=change-me
 ExecStart=/home/YOUR_USER/kalshi-weather/.venv/bin/uvicorn live_app:app --host 0.0.0.0 --port 8000
 Restart=always
 RestartSec=5
@@ -77,16 +74,12 @@ sudo systemctl status kalshi-live-dashboard
 To update later:
 
 ```bash
-cd /home/YOUR_USER/kalshi-weather
-git pull
-source .venv/bin/activate
-pip install -r requirements.txt
-sudo systemctl restart kalshi-live-dashboard
+kalshi-live-update
 ```
 
 ## Optional Nginx Proxy
 
-Use Nginx and HTTPS if exposing the dashboard publicly. Keep the dashboard password enabled.
+Use Nginx and HTTPS if exposing the dashboard publicly.
 
 ```nginx
 server {

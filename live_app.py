@@ -1,17 +1,9 @@
 from __future__ import annotations
 
-import hashlib
-import hmac
-import html
-import os
-from urllib.parse import parse_qs
-
-from fastapi import Cookie, FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from live_dashboard import LiveDashboardCache
-
-COOKIE_NAME = "kalshi_live_session"
 
 app = FastAPI(title="Kalshi Weather Live Dashboard")
 live_cache = LiveDashboardCache()
@@ -23,76 +15,13 @@ def health() -> dict[str, str]:
 
 
 @app.get("/", response_class=HTMLResponse)
-def dashboard(kalshi_live_session: str | None = Cookie(default=None)) -> HTMLResponse:
-    if not _authorized(kalshi_live_session):
-        return HTMLResponse(_login_html(), status_code=401)
+def dashboard() -> HTMLResponse:
     return HTMLResponse(_dashboard_html())
 
 
-@app.post("/login")
-async def login(request: Request) -> RedirectResponse:
-    body = (await request.body()).decode("utf-8", errors="replace")
-    password = parse_qs(body).get("password", [""])[0]
-    if not _password_configured() or not hmac.compare_digest(password, _password()):
-        return RedirectResponse("/", status_code=303)
-    response = RedirectResponse("/", status_code=303)
-    response.set_cookie(
-        COOKIE_NAME,
-        _session_token(),
-        httponly=True,
-        samesite="lax",
-        max_age=60 * 60 * 18,
-    )
-    return response
-
-
 @app.get("/api/live")
-def api_live(kalshi_live_session: str | None = Cookie(default=None)) -> JSONResponse:
-    if not _authorized(kalshi_live_session):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+def api_live() -> JSONResponse:
     return JSONResponse(live_cache.get())
-
-
-def _password_configured() -> bool:
-    return bool(_password())
-
-
-def _password() -> str:
-    return os.environ.get("LIVE_DASHBOARD_PASSWORD", "")
-
-
-def _authorized(cookie: str | None) -> bool:
-    if not _password_configured():
-        return True
-    return bool(cookie) and hmac.compare_digest(cookie, _session_token())
-
-
-def _session_token() -> str:
-    return hashlib.sha256(("kalshi-live-dashboard:" + _password()).encode("utf-8")).hexdigest()
-
-
-def _login_html() -> str:
-    warning = "" if _password_configured() else "<p>Set LIVE_DASHBOARD_PASSWORD before exposing this dashboard.</p>"
-    return f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Kalshi Weather Live Login</title>
-  <style>{_css()}</style>
-</head>
-<body>
-  <main class="login">
-    <h1>Weather Live</h1>
-    <p>Research only. No trading or order placement.</p>
-    {warning}
-    <form method="post" action="/login">
-      <label>Password <input type="password" name="password" autofocus></label>
-      <button type="submit">Open Dashboard</button>
-    </form>
-  </main>
-</body>
-</html>"""
 
 
 def _dashboard_html() -> str:
@@ -108,14 +37,22 @@ def _dashboard_html() -> str:
   <main class="shell">
     <header class="topbar">
       <div>
-        <h1>Weather Live</h1>
+        <p class="kicker">Live Weather Scout</p>
+        <h1>Three-City Market Board</h1>
         <p>Las Vegas, Phoenix, San Antonio. Research only. No trading or order placement.</p>
       </div>
-      <div class="status">
-        <strong id="statusText">Loading...</strong>
-        <span id="updatedText">Waiting for first pull</span>
+      <div class="statusDeck">
+        <div class="status">
+          <span>Last pull</span>
+          <strong id="statusText">Loading</strong>
+        </div>
+        <div class="status">
+          <span>Refresh</span>
+          <strong id="updatedText">60s backend</strong>
+        </div>
       </div>
     </header>
+    <section id="summary" class="summary"></section>
     <section id="cards" class="cards"></section>
     <footer class="support">
       <a href="https://www.buymeacoffee.com/jeanmatias" target="_blank" rel="noopener noreferrer" aria-label="Buy Jean Matias a coffee">
@@ -132,61 +69,127 @@ def _css() -> str:
     return """
 :root {
   color-scheme: light;
-  --bg: #f5f7fa;
-  --panel: #fff;
-  --line: #d7e0ea;
-  --ink: #152235;
-  --muted: #64748b;
-  --good: #147a54;
-  --good-bg: #e9f8f0;
-  --warn: #9a6700;
-  --warn-bg: #fff5d9;
+  --bg: #f6f7f4;
+  --panel: #ffffff;
+  --panel-soft: #f8faf7;
+  --line: #d8dfd6;
+  --ink: #17211b;
+  --muted: #687469;
+  --good: #15724e;
+  --good-bg: #e8f6ee;
+  --warn: #9a6500;
+  --warn-bg: #fff3cf;
   --bad: #b42318;
-  --bad-bg: #ffe9e6;
+  --bad-bg: #ffe7e2;
+  --accent: #176b78;
+  --shadow: 0 18px 45px rgba(23, 33, 27, 0.10);
 }
 * { box-sizing: border-box; }
-body { margin: 0; font-family: Arial, Helvetica, sans-serif; background: var(--bg); color: var(--ink); }
-.shell { max-width: 1180px; margin: 0 auto; padding: 24px; }
-.topbar { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 18px; }
-h1 { margin: 0; font-size: 32px; letter-spacing: 0; }
-p { margin: 6px 0 0; color: var(--muted); }
-.status, .login {
+body {
+  margin: 0;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  background:
+    linear-gradient(180deg, #eef4ef 0, #f6f7f4 260px),
+    var(--bg);
+  color: var(--ink);
+}
+.shell { max-width: 1220px; margin: 0 auto; padding: 28px 24px 32px; }
+.topbar { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; margin-bottom: 18px; }
+.kicker {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  margin: 0 0 7px;
+  text-transform: uppercase;
+}
+h1 { margin: 0; font-size: 34px; line-height: 1.05; letter-spacing: 0; }
+p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
+.statusDeck { display: grid; grid-template-columns: repeat(2, minmax(126px, 1fr)); gap: 10px; }
+.status {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 14px;
+  box-shadow: 0 8px 24px rgba(23, 33, 27, 0.06);
+  min-width: 132px;
+  padding: 12px 14px;
 }
-.status strong, .status span { display: block; }
-.cards { display: grid; gap: 14px; }
+.status span { color: var(--muted); display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+.status strong { display: block; font-size: 17px; margin-top: 4px; }
+.summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 14px; }
+.summaryItem {
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 13px 14px;
+}
+.summaryItem span { color: var(--muted); display: block; font-size: 12px; font-weight: 700; text-transform: uppercase; }
+.summaryItem strong { display: block; font-size: 24px; line-height: 1.1; margin-top: 3px; }
+.cards { display: grid; gap: 16px; }
 .card {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-left: 5px solid var(--warn);
+  border-top: 4px solid var(--warn);
   border-radius: 8px;
-  padding: 16px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
 }
-.card.good { border-left-color: var(--good); }
-.card.bad { border-left-color: var(--bad); }
-.card h2 { margin: 0; font-size: 22px; }
-.card-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
-.badge { border-radius: 999px; padding: 5px 9px; font-size: 12px; font-weight: 700; background: var(--warn-bg); color: var(--warn); }
+.card.good { border-top-color: var(--good); }
+.card.bad { border-top-color: var(--bad); }
+.card-main { padding: 18px; }
+.card h2 { margin: 0; font-size: 24px; line-height: 1.05; }
+.card-head { display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; }
+.badge { border-radius: 999px; padding: 6px 10px; font-size: 12px; font-weight: 800; background: var(--warn-bg); color: var(--warn); white-space: nowrap; }
 .good .badge { background: var(--good-bg); color: var(--good); }
 .bad .badge { background: var(--bad-bg); color: var(--bad); }
+.visualGrid { display: grid; grid-template-columns: minmax(260px, 0.85fr) 1.15fr; gap: 14px; margin-top: 16px; }
+.marketPanel, .tempPanel {
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 13px;
+}
+.panelTitle { color: var(--muted); font-size: 12px; font-weight: 800; margin-bottom: 10px; text-transform: uppercase; }
+.bucketRow { display: grid; gap: 6px; margin-bottom: 12px; }
+.bucketTop { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; font-weight: 800; }
+.bucketTop span { color: var(--muted); font-weight: 700; }
+.barTrack { background: #e7ede7; border-radius: 999px; height: 10px; overflow: hidden; }
+.barFill { background: var(--accent); border-radius: inherit; height: 100%; width: 0; }
+.bucketRow.second .barFill { background: #9d7a27; }
+.tempRail { margin-top: 8px; }
+.tempLabels { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; font-weight: 700; margin-bottom: 6px; }
+.tempTrack { background: #e7ede7; border-radius: 999px; height: 14px; overflow: hidden; position: relative; }
+.tempFill { background: linear-gradient(90deg, #176b78, #d49228); border-radius: inherit; height: 100%; width: 0; }
+.tempMarker {
+  background: var(--ink);
+  border: 2px solid var(--panel);
+  border-radius: 999px;
+  height: 18px;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 18px;
+}
 .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 14px; }
-.metric { background: #f8fafc; border: 1px solid var(--line); border-radius: 6px; padding: 10px; min-width: 0; }
-.metric span { display: block; color: var(--muted); font-size: 11px; margin-bottom: 5px; }
-.metric strong { display: block; font-size: 18px; overflow-wrap: anywhere; }
-.note { margin-top: 12px; font-weight: 700; color: var(--ink); }
-.warnings { margin-top: 10px; color: var(--bad); font-size: 13px; }
-.login { max-width: 420px; margin: 12vh auto; }
-label, input, button { display: block; width: 100%; }
-input, button { margin-top: 8px; padding: 10px; border-radius: 6px; border: 1px solid var(--line); font: inherit; }
-button { background: var(--ink); color: #fff; cursor: pointer; }
+.metric { background: #fff; border: 1px solid var(--line); border-radius: 6px; min-width: 0; padding: 10px; }
+.metric span { display: block; color: var(--muted); font-size: 11px; font-weight: 750; margin-bottom: 5px; text-transform: uppercase; }
+.metric strong { display: block; font-size: 17px; overflow-wrap: anywhere; }
+.note {
+  background: #fbfcfa;
+  border-top: 1px solid var(--line);
+  color: var(--ink);
+  font-weight: 800;
+  margin: 0;
+  padding: 13px 18px;
+}
+.warnings { color: var(--bad); font-size: 13px; margin: 10px 18px 0; }
 .support { display: flex; justify-content: center; margin-top: 22px; }
 .support img { display: block; height: 42px; max-width: 220px; }
 @media (max-width: 850px) {
   .topbar { display: block; }
-  .status { margin-top: 12px; }
+  .statusDeck { margin-top: 12px; }
+  .summary { grid-template-columns: 1fr; }
+  .visualGrid { grid-template-columns: 1fr; }
   .metrics { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 560px) {
@@ -199,6 +202,7 @@ button { background: var(--ink); color: #fff; cursor: pointer; }
 def _javascript() -> str:
     return """
 const cards = document.getElementById('cards');
+const summary = document.getElementById('summary');
 const statusText = document.getElementById('statusText');
 const updatedText = document.getElementById('updatedText');
 
@@ -216,6 +220,34 @@ function fmtPrice(bucket) {
   return `${bucket.label || 'unknown'} @ ${price}`;
 }
 
+function cents(bucket) {
+  if (!bucket || bucket.yes_price === null || bucket.yes_price === undefined) return 0;
+  return Math.max(0, Math.min(100, Number(bucket.yes_price)));
+}
+
+function tempPercent(city, value) {
+  const current = Number(city.current_temp_f);
+  const forecast = Number(city.forecast_high_f);
+  const rawHigh = Number(city.raw_high_so_far_f);
+  const max = Math.max(current || 0, forecast || 0, rawHigh || 0);
+  const min = Math.max(0, max - 28);
+  const number = Number(value);
+  if (!Number.isFinite(number) || max <= min) return 0;
+  return Math.max(0, Math.min(100, ((number - min) / (max - min)) * 100));
+}
+
+function renderSummary(payload) {
+  const cities = payload.cities || [];
+  const aligned = cities.filter(city => city.market_weather_alignment === 'ALIGNED').length;
+  const reachable = cities.filter(city => ['REACHED', 'REACHABLE'].includes(city.reachability_label)).length;
+  const warnings = cities.filter(city => city.false_pump_warning || city.reachability_label === 'CROSSED_ABOVE').length;
+  summary.innerHTML = `
+    <div class="summaryItem"><span>Aligned</span><strong>${aligned}/${cities.length}</strong></div>
+    <div class="summaryItem"><span>Reachable</span><strong>${reachable}/${cities.length}</strong></div>
+    <div class="summaryItem"><span>Warnings</span><strong>${warnings}</strong></div>
+  `;
+}
+
 function tone(city) {
   if (city.false_pump_warning || city.reachability_label === 'CROSSED_ABOVE') return 'bad';
   if (city.market_weather_alignment === 'ALIGNED' && ['REACHED', 'REACHABLE'].includes(city.reachability_label)) return 'good';
@@ -224,35 +256,65 @@ function tone(city) {
 
 function render(payload) {
   const updated = payload.last_updated || payload.generated_at || 'unknown';
-  statusText.textContent = `Updated ${new Date(updated).toLocaleTimeString()}`;
-  updatedText.textContent = `Backend refresh: ${payload.refresh_seconds || 60}s`;
+  statusText.textContent = new Date(updated).toLocaleTimeString();
+  updatedText.textContent = `${payload.refresh_seconds || 60}s backend`;
+  renderSummary(payload);
   cards.innerHTML = (payload.cities || []).map(city => `
     <article class="card ${tone(city)}">
-      <div class="card-head">
-        <div>
-          <h2>${escapeHtml(city.city)}</h2>
-          <p>${escapeHtml(city.station_id || '')} · ${escapeHtml(city.market_date || '')}</p>
+      <div class="card-main">
+        <div class="card-head">
+          <div>
+            <h2>${escapeHtml(city.city)}</h2>
+            <p>${escapeHtml(city.station_id || '')} | ${escapeHtml(city.market_date || '')}</p>
+          </div>
+          <span class="badge">${escapeHtml(city.reachability_label || 'n/a')}</span>
         </div>
-        <span class="badge">${escapeHtml(city.reachability_label || 'n/a')}</span>
-      </div>
-      <div class="metrics">
-        <div class="metric"><span>Winning Bucket</span><strong>${escapeHtml(fmtPrice(city.winning_bucket))}</strong></div>
-        <div class="metric"><span>Second Bucket</span><strong>${escapeHtml(fmtPrice(city.second_bucket))}</strong></div>
-        <div class="metric"><span>Current Temp</span><strong>${fmtTemp(city.current_temp_f)}</strong></div>
-        <div class="metric"><span>High So Far</span><strong>${fmtTemp(city.high_so_far_f)}</strong></div>
-        <div class="metric"><span>Raw High</span><strong>${fmtTemp(city.raw_high_so_far_f)}</strong></div>
-        <div class="metric"><span>Forecast High</span><strong>${fmtTemp(city.forecast_high_f)}</strong></div>
-        <div class="metric"><span>Critical Hour</span><strong>${escapeHtml(city.critical_window_et || 'n/a')}</strong></div>
-        <div class="metric"><span>Market vs Weather</span><strong>${escapeHtml(city.market_weather_alignment || 'n/a')}</strong></div>
-        <div class="metric"><span>Heating Pace</span><strong>${fmtRate(city.heating_rate_f_per_hour)}</strong></div>
-        <div class="metric"><span>Needed Rate</span><strong>${fmtRate(city.required_rate_f_per_hour)}</strong></div>
-        <div class="metric"><span>Degrees Needed</span><strong>${fmtTemp(city.degrees_needed_to_reach_bucket)}</strong></div>
-        <div class="metric"><span>False Pump</span><strong>${city.false_pump_warning ? 'YES' : 'no'}</strong></div>
+        <div class="visualGrid">
+          <div class="marketPanel">
+            <div class="panelTitle">Kalshi board</div>
+            ${bucketVisual('Winning', city.winning_bucket, '')}
+            ${bucketVisual('Second', city.second_bucket, 'second')}
+          </div>
+          <div class="tempPanel">
+            <div class="panelTitle">Official station temperature</div>
+            <div class="tempLabels">
+              <span>Current ${fmtTemp(city.current_temp_f)}</span>
+              <span>Forecast ${fmtTemp(city.forecast_high_f)}</span>
+            </div>
+            <div class="tempTrack">
+              <div class="tempFill" style="width:${tempPercent(city, city.current_temp_f).toFixed(1)}%"></div>
+              <div class="tempMarker" title="Raw high so far" style="left:${tempPercent(city, city.raw_high_so_far_f).toFixed(1)}%"></div>
+            </div>
+          </div>
+        </div>
+        <div class="metrics">
+          <div class="metric"><span>High So Far</span><strong>${fmtTemp(city.high_so_far_f)}</strong></div>
+          <div class="metric"><span>Raw High</span><strong>${fmtTemp(city.raw_high_so_far_f)}</strong></div>
+          <div class="metric"><span>Critical Hour</span><strong>${escapeHtml(city.critical_window_et || 'n/a')}</strong></div>
+          <div class="metric"><span>Market vs Weather</span><strong>${escapeHtml(city.market_weather_alignment || 'n/a')}</strong></div>
+          <div class="metric"><span>Heating Pace</span><strong>${fmtRate(city.heating_rate_f_per_hour)}</strong></div>
+          <div class="metric"><span>Needed Rate</span><strong>${fmtRate(city.required_rate_f_per_hour)}</strong></div>
+          <div class="metric"><span>Degrees Needed</span><strong>${fmtTemp(city.degrees_needed_to_reach_bucket)}</strong></div>
+          <div class="metric"><span>False Pump</span><strong>${city.false_pump_warning ? 'YES' : 'no'}</strong></div>
+        </div>
+        ${(city.warnings || []).length ? `<p class="warnings">${escapeHtml(city.warnings[0])}</p>` : ''}
       </div>
       <p class="note">${escapeHtml(city.decision_note || '')}</p>
-      ${(city.warnings || []).length ? `<p class="warnings">${escapeHtml(city.warnings[0])}</p>` : ''}
     </article>
   `).join('');
+}
+
+function bucketVisual(title, bucket, className) {
+  const price = cents(bucket);
+  return `
+    <div class="bucketRow ${className}">
+      <div class="bucketTop">
+        <strong>${escapeHtml(title)}: ${escapeHtml(bucket?.label || 'n/a')}</strong>
+        <span>${price.toFixed(0)}c</span>
+      </div>
+      <div class="barTrack"><div class="barFill" style="width:${price}%"></div></div>
+    </div>
+  `;
 }
 
 function escapeHtml(value) {
@@ -264,10 +326,6 @@ function escapeHtml(value) {
 async function load() {
   try {
     const response = await fetch('/api/live', {cache: 'no-store'});
-    if (response.status === 401) {
-      window.location.reload();
-      return;
-    }
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     render(await response.json());
   } catch (error) {

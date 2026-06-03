@@ -1,7 +1,5 @@
-import os
 import unittest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -120,24 +118,16 @@ class LiveDashboardServiceTests(unittest.TestCase):
 
 
 class LiveDashboardAppTests(unittest.TestCase):
-    def test_password_protects_dashboard_and_api(self):
-        with patch.dict(os.environ, {"LIVE_DASHBOARD_PASSWORD": "secret"}, clear=False):
-            import live_app
+    def test_dashboard_and_api_are_public(self):
+        import live_app
 
-            live_app.live_cache.value = {"cities": [], "last_updated": "now", "next_refresh_eta": "soon"}
-            client = TestClient(live_app.app)
+        live_app.live_cache.value = {"cities": [], "last_updated": "now", "next_refresh_eta": "soon"}
+        client = TestClient(live_app.app)
 
-            self.assertEqual(client.get("/").status_code, 401)
-            self.assertEqual(client.get("/api/live").status_code, 401)
-
-            response = client.post("/login", data={"password": "secret"}, follow_redirects=False)
-            self.assertEqual(response.status_code, 303)
-            cookie = response.cookies.get("kalshi_live_session")
-            self.assertIsNotNone(cookie)
-
-            authed = client.get("/api/live", cookies={"kalshi_live_session": cookie})
-            self.assertEqual(authed.status_code, 200)
-            self.assertEqual(authed.json()["cities"], [])
+        self.assertEqual(client.get("/").status_code, 200)
+        response = client.get("/api/live")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["cities"], [])
 
     def test_health_route_is_public(self):
         import live_app
