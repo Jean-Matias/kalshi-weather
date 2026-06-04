@@ -334,6 +334,37 @@ AVERAGE         64
         self.assertTrue(weather["active_heating_window"])
         self.assertIn("Latest station observation is stale", "\n".join(weather["warnings"]))
 
+    def test_fill_derived_weather_promotes_latest_temp_above_lagging_history_high(self):
+        weather = {
+            "cli_high_f": None,
+            "cli_report_date": None,
+            "current_temp_f": 89.6,
+            "raw_high_so_far_f": 87.8,
+            "high_so_far_f": 88.0,
+            "forecast_high_f": 87.0,
+            "latest_observation_time": "2026-06-04T19:30:00+00:00",
+            "open_meteo_high_f": None,
+            "model_disagreement_f": None,
+            "cloud_cover_change": None,
+            "open_meteo_cloud_change": None,
+            "settlement_source_status": "cli_unavailable",
+            "market_day_state": "today",
+            "warnings": [],
+        }
+
+        _fill_derived_weather(
+            weather,
+            {
+                "market_date": "2026-06-04",
+                "timezone": "America/Chicago",
+                "notes": "",
+            },
+            now=datetime.fromisoformat("2026-06-04T19:35:00+00:00"),
+        )
+
+        self.assertEqual(weather["raw_high_so_far_f"], 89.6)
+        self.assertEqual(weather["high_so_far_f"], 90.0)
+
     def test_future_market_uses_forecast_without_observed_high(self):
         weather = {
             "cli_high_f": None,

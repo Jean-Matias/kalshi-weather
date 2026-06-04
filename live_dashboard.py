@@ -143,12 +143,18 @@ def recent_observation_feed_summary(weather: dict[str, Any]) -> dict[str, Any]:
     latest_history_temp = latest_point.get("temp_f")
     endpoint_time = weather.get("observation_time")
     endpoint_temp = weather.get("current_temp_f")
+    endpoint_temp_number = _to_float(endpoint_temp)
+    if endpoint_temp_number is not None and (recent_max is None or endpoint_temp_number > recent_max):
+        recent_max = round(endpoint_temp_number, 1)
     history_ahead = _history_is_ahead(endpoint_time, latest_history_time)
     recent_max_hotter = _recent_max_is_hotter(endpoint_temp, recent_max)
-    warning = history_ahead or recent_max_hotter
+    endpoint_hotter = _endpoint_is_hotter_than_history(endpoint_temp, latest_history_temp)
+    warning = history_ahead or recent_max_hotter or endpoint_hotter
     note = None
     if history_ahead:
         note = "Latest endpoint may be behind the recent observation list. Use recent max in final minutes."
+    elif endpoint_hotter:
+        note = "Latest endpoint is hotter than the recent history list. Use latest endpoint for bucket checks until history catches up."
     elif recent_max_hotter:
         note = "Recent observation history has a hotter official reading than the latest endpoint. Use recent max for bucket checks."
     return {
@@ -214,8 +220,8 @@ def collect_live_temp_meter(city_name: str) -> dict[str, Any]:
         warnings.append(f"NWS observation history unavailable: {exc}")
 
     feed_summary = recent_observation_feed_summary(weather)
-    raw_high = weather.get("raw_high_so_far_f")
-    rounded_high = weather.get("high_so_far_f")
+    raw_high = _promoted_raw_high(weather.get("raw_high_so_far_f"), weather.get("current_temp_f"))
+    rounded_high = _round_official_temp(raw_high)
     return {
         "generated_at": generated_at.isoformat(),
         "city": city_config["city"],
@@ -340,6 +346,40 @@ def _recent_max_is_hotter(endpoint_temp: Any, recent_max: Any) -> bool:
         return float(recent_max) - float(endpoint_temp) >= 0.5
     except (TypeError, ValueError):
         return False
+
+
+def _endpoint_is_hotter_than_history(endpoint_temp: Any, latest_history_temp: Any) -> bool:
+    try:
+        if endpoint_temp is None or latest_history_temp is None:
+            return False
+        return float(endpoint_temp) - float(latest_history_temp) >= 0.5
+    except (TypeError, ValueError):
+        return False
+
+
+def _promoted_raw_high(history_high: Any, endpoint_temp: Any) -> float | None:
+    values = [
+        value
+        for value in [_to_float(history_high), _to_float(endpoint_temp)]
+        if value is not None
+    ]
+    return round(max(values), 1) if values else None
+
+
+def _round_official_temp(value: Any) -> float | None:
+    number = _to_float(value)
+    if number is None:
+        return None
+    return float(int(number + 0.5))
+
+
+def _to_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _parse_iso_time(value: Any) -> datetime | None:

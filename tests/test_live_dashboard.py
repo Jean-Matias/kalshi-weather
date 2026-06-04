@@ -1,8 +1,10 @@
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+import live_dashboard
 from live_dashboard import (
     LiveDashboardCache,
     LiveTempMeterCache,
@@ -157,6 +159,49 @@ class LiveDashboardServiceTests(unittest.TestCase):
         self.assertEqual(summary["recent_observation_max_f"], 87.8)
         self.assertEqual(summary["latest_history_temp_f"], 87.8)
         self.assertTrue(summary["latest_feed_lag_warning"])
+
+    def test_recent_observation_feed_summary_includes_hotter_latest_endpoint(self):
+        weather = {
+            "current_temp_f": 89.6,
+            "observation_time": "2026-06-04T19:30:00+00:00",
+            "recent_observation_points": [
+                {"time": "2026-06-04T19:20:00+00:00", "temp_f": 87.8},
+                {"time": "2026-06-04T19:25:00+00:00", "temp_f": 87.8},
+            ],
+        }
+
+        summary = recent_observation_feed_summary(weather)
+
+        self.assertEqual(summary["recent_observation_max_f"], 89.6)
+        self.assertTrue(summary["latest_feed_lag_warning"])
+
+    def test_temp_meter_promotes_hotter_latest_endpoint_to_high_so_far(self):
+        with (
+            patch(
+                "live_dashboard.fetch_nws_latest_observation",
+                return_value={
+                    "current_temp_f": 89.6,
+                    "observation_time": "2026-06-04T19:30:00+00:00",
+                },
+            ),
+            patch("live_dashboard.fetch_fast_metar_observation", return_value={}),
+            patch(
+                "live_dashboard.fetch_nws_observation_history",
+                return_value={
+                    "raw_high_so_far_f": 87.8,
+                    "high_so_far_f": 88.0,
+                    "recent_observation_points": [
+                        {"time": "2026-06-04T19:20:00+00:00", "temp_f": 87.8},
+                        {"time": "2026-06-04T19:25:00+00:00", "temp_f": 87.8},
+                    ],
+                },
+            ),
+        ):
+            payload = live_dashboard.collect_live_temp_meter("San Antonio")
+
+        self.assertEqual(payload["raw_high_so_far_f"], 89.6)
+        self.assertEqual(payload["high_so_far_f"], 90.0)
+        self.assertEqual(payload["recent_observation_max_f"], 89.6)
 
     def test_cache_prevents_refetch_inside_ttl(self):
         calls = {"count": 0}

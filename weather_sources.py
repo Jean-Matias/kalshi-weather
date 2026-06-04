@@ -371,6 +371,12 @@ def _fill_derived_weather(
         if value is not None and not market_is_future
     ]
     observed_high = max(observed_candidates) if observed_candidates else None
+    latest_temp = _to_float(weather.get("current_temp_f"))
+    raw_high = _to_float(weather.get("raw_high_so_far_f"))
+    existing_high = raw_high if raw_high is not None else _to_float(weather.get("high_so_far_f"))
+    if latest_temp is not None and not market_is_future and (existing_high is None or latest_temp > existing_high):
+        weather["raw_high_so_far_f"] = latest_temp
+        weather["high_so_far_f"] = _round_official_temp(latest_temp)
     if cli_high is not None and target_date and cli_report_date and cli_report_date != target_date:
         weather["settlement_source_status"] = "cli_wrong_date"
         weather["warnings"].append(
