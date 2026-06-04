@@ -7,6 +7,7 @@ from live_dashboard import (
     LiveDashboardCache,
     LiveTempMeterCache,
     build_city_payload,
+    current_live_city_configs,
     favorite_buckets,
     live_city_config,
     market_date_label,
@@ -28,6 +29,14 @@ class LiveDashboardServiceTests(unittest.TestCase):
 
         self.assertEqual(cities, ["Phoenix", "Las Vegas", "San Antonio"])
         self.assertEqual(len({config["market_date"] for config in configs}), 1)
+
+    def test_current_live_city_configs_recomputes_stale_startup_dates(self):
+        configs = current_live_city_configs()
+        vegas = next(config for config in configs if config["city"] == "Las Vegas")
+        suffix = datetime.fromisoformat(vegas["market_date"]).strftime("%y%b%d").lower()
+
+        self.assertNotEqual(vegas["market_date"], "2026-05-24")
+        self.assertIn(suffix, vegas["kalshi_url"])
 
     def test_live_city_config_matches_allowed_city_case_insensitive(self):
         config = live_city_config("san antonio")

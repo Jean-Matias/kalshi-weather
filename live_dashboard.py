@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
-from config import CITY_CONFIGS, city_configs_for_date, next_market_date
+from config import CITY_CONFIGS, _with_market_date_suffix, city_configs_for_date, next_market_date
 from decision_layer import enrich_decision_layer
 from kalshi_api import fetch_kalshi_api_observation
 from scoring import score_market
@@ -28,8 +30,22 @@ TEMP_METER_BROWSER_POLL_SECONDS = _env_int("LIVE_TEMP_METER_BROWSER_POLL_SECONDS
 
 def selected_live_city_configs(day: str = "today") -> list[dict[str, Any]]:
     wanted = set(LIVE_CITY_NAMES)
-    configs = CITY_CONFIGS if day != "tomorrow" else city_configs_for_date(next_market_date())
+    configs = current_live_city_configs() if day != "tomorrow" else city_configs_for_date(next_market_date())
     return [config for config in configs if config["city"] in wanted]
+
+
+def current_live_city_configs() -> list[dict[str, Any]]:
+    configs = deepcopy(CITY_CONFIGS)
+    for config in configs:
+        market_date = datetime.now(ZoneInfo(config["timezone"])).date().isoformat()
+        config["market_date"] = market_date
+        config["kalshi_url"] = _with_market_date_suffix(config["kalshi_url"], market_date, uppercase=False)
+        config["kalshi_event_ticker"] = _with_market_date_suffix(
+            config["kalshi_event_ticker"],
+            market_date,
+            uppercase=True,
+        )
+    return configs
 
 
 def live_city_config(city_name: str, day: str = "today") -> dict[str, Any] | None:
