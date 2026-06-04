@@ -405,6 +405,10 @@ const tabButtons = document.querySelectorAll('.tabButton');
 let nextRefreshAt = null;
 let refreshInFlight = false;
 let activeDay = 'today';
+let mainPollSeconds = 15;
+let tempMeterPollSeconds = 3;
+let mainPollTimer = null;
+let tempMeterPollTimer = null;
 const openFinalCities = new Set();
 const tempMeterInFlight = new Set();
 const tempMeterNextPullAt = new Map();
@@ -477,6 +481,10 @@ function tempMeterCountdown(cityName) {
   return seconds > 0 ? `${seconds}s` : 'due now';
 }
 
+function tempMeterPullText() {
+  return `${tempMeterPollSeconds}s temp pull`;
+}
+
 function roundedOutcome(city) {
   return city.high_so_far_f === null || city.high_so_far_f === undefined ? 'n/a' : `${Number(city.high_so_far_f).toFixed(0)}F`;
 }
@@ -538,6 +546,9 @@ function render(payload) {
   const updated = payload.last_updated || payload.generated_at || 'unknown';
   nextRefreshAt = payload.next_refresh_eta ? new Date(payload.next_refresh_eta) : null;
   activeDay = payload.active_day || activeDay;
+  mainPollSeconds = Number(payload.browser_poll_seconds || mainPollSeconds || 15);
+  tempMeterPollSeconds = Number(payload.temp_meter_browser_poll_seconds || tempMeterPollSeconds || 3);
+  syncPollTimers();
   statusText.textContent = new Date(updated).toLocaleTimeString();
   renderBanner(payload);
   updateCountdown();
@@ -633,9 +644,9 @@ function liveTempMeter(city) {
       <div class="liveMeterHead">
         <div>
           <div class="liveMeterTitle">Live Temp Meter</div>
-          <div class="liveMeterSub">Temp-only official NWS station check every 3 seconds while this panel is open.</div>
+          <div class="liveMeterSub">Temp-only official NWS station check every ${tempMeterPollSeconds} seconds while this panel is open.</div>
         </div>
-        <div class="liveMeterPill">3s temp pull</div>
+        <div class="liveMeterPill">${escapeHtml(tempMeterPullText())}</div>
       </div>
       <div class="liveMeterGrid">
         <div class="liveMeterItem primary"><span>Latest Temp</span><strong data-meter-field="current">${fmtTemp(city.latest_endpoint_temp_f ?? city.current_temp_f)}</strong></div>
@@ -745,6 +756,10 @@ async function refreshTempMeter(cityName) {
     const response = await fetch(`/api/temp-meter?city=${encodeURIComponent(cityName)}`, {cache: 'no-store'});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const payload = await response.json();
+    if (payload.browser_poll_seconds) {
+      tempMeterPollSeconds = Number(payload.browser_poll_seconds);
+      syncPollTimers();
+    }
     updateTempMeter(payload);
     const refreshSeconds = Number(payload.cache_ttl_seconds || payload.refresh_seconds || 3);
     tempMeterNextPullAt.set(cityName, Date.now() + refreshSeconds * 1000);
@@ -801,6 +816,13 @@ function cssEscape(value) {
   return String(value).replace(/["\\\\]/g, '\\\\$&');
 }
 
+function syncPollTimers() {
+  if (mainPollTimer) clearInterval(mainPollTimer);
+  if (tempMeterPollTimer) clearInterval(tempMeterPollTimer);
+  mainPollTimer = setInterval(load, Math.max(1, mainPollSeconds) * 1000);
+  tempMeterPollTimer = setInterval(refreshOpenTempMeters, Math.max(1, tempMeterPollSeconds) * 1000);
+}
+
 function bucketVisual(title, bucket, className) {
   const price = cents(bucket);
   return `
@@ -852,8 +874,7 @@ async function load() {
 }
 
 load();
-setInterval(load, 15000);
-setInterval(refreshOpenTempMeters, 3000);
+syncPollTimers();
 setInterval(() => {
   updateCountdown();
   updatePeakCountdowns();

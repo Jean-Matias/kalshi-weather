@@ -224,6 +224,26 @@ class LiveDashboardAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["active_day"], "tomorrow")
 
+    def test_api_live_includes_public_polling_metadata(self):
+        import live_app
+
+        live_app.live_cache.values = {
+            "today": {
+                "cities": [],
+                "active_day": "today",
+                "browser_poll_seconds": 60,
+                "temp_meter_browser_poll_seconds": 10,
+            }
+        }
+        live_app.live_cache.fetched_at = {}
+        client = TestClient(live_app.app)
+
+        response = client.get("/api/live")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["browser_poll_seconds"], 60)
+        self.assertEqual(response.json()["temp_meter_browser_poll_seconds"], 10)
+
     def test_temp_meter_api_returns_city_payload(self):
         import live_app
 
@@ -269,7 +289,8 @@ class LiveDashboardAppTests(unittest.TestCase):
         self.assertIn("/api/live?day=", html)
         self.assertIn("Open Live Temp Meter", html)
         self.assertIn("Live Temp Meter", html)
-        self.assertIn("setInterval(refreshOpenTempMeters, 3000)", html)
+        self.assertIn("tempMeterPollSeconds", html)
+        self.assertIn("syncPollTimers", html)
         self.assertIn("/api/temp-meter?city=", html)
         self.assertIn("Latest Endpoint", html)
         self.assertIn("Recent Max", html)

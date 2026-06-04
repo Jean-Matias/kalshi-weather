@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
@@ -9,9 +10,20 @@ from kalshi_api import fetch_kalshi_api_observation
 from scoring import score_market
 from weather_sources import fetch_nws_latest_observation, fetch_nws_observation_history, fetch_weather
 
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, default)))
+    except (TypeError, ValueError):
+        return default
+
+
 LIVE_CITY_NAMES = ("Phoenix", "Las Vegas", "San Antonio")
-DEFAULT_CACHE_TTL_SECONDS = 60
-LIVE_TEMP_METER_TTL_SECONDS = 3
+PUBLIC_TRAFFIC_MODE = os.environ.get("PUBLIC_TRAFFIC_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+DEFAULT_CACHE_TTL_SECONDS = _env_int("LIVE_DASHBOARD_CACHE_SECONDS", 60)
+LIVE_TEMP_METER_TTL_SECONDS = _env_int("LIVE_TEMP_METER_CACHE_SECONDS", 5 if PUBLIC_TRAFFIC_MODE else 3)
+BROWSER_POLL_SECONDS = _env_int("LIVE_DASHBOARD_BROWSER_POLL_SECONDS", 60 if PUBLIC_TRAFFIC_MODE else 15)
+TEMP_METER_BROWSER_POLL_SECONDS = _env_int("LIVE_TEMP_METER_BROWSER_POLL_SECONDS", 10 if PUBLIC_TRAFFIC_MODE else 3)
 
 
 def selected_live_city_configs(day: str = "today") -> list[dict[str, Any]]:
@@ -145,6 +157,9 @@ def collect_live_payload(day: str = "today") -> dict[str, Any]:
         "cities": cities,
         "research_only": True,
         "refresh_seconds": DEFAULT_CACHE_TTL_SECONDS,
+        "browser_poll_seconds": BROWSER_POLL_SECONDS,
+        "temp_meter_browser_poll_seconds": TEMP_METER_BROWSER_POLL_SECONDS,
+        "public_traffic_mode": PUBLIC_TRAFFIC_MODE,
     }
 
 
@@ -158,6 +173,8 @@ def collect_live_temp_meter(city_name: str) -> dict[str, Any]:
             "ok": False,
             "error": "City is not available on this live dashboard.",
             "refresh_seconds": LIVE_TEMP_METER_TTL_SECONDS,
+            "browser_poll_seconds": TEMP_METER_BROWSER_POLL_SECONDS,
+            "public_traffic_mode": PUBLIC_TRAFFIC_MODE,
         }
 
     warnings: list[str] = []
@@ -192,6 +209,8 @@ def collect_live_temp_meter(city_name: str) -> dict[str, Any]:
         "latest_feed_lag_note": feed_summary["latest_feed_lag_note"],
         "warnings": warnings,
         "refresh_seconds": LIVE_TEMP_METER_TTL_SECONDS,
+        "browser_poll_seconds": TEMP_METER_BROWSER_POLL_SECONDS,
+        "public_traffic_mode": PUBLIC_TRAFFIC_MODE,
     }
 
 
