@@ -9,6 +9,8 @@ from live_dashboard import (
     build_city_payload,
     favorite_buckets,
     live_city_config,
+    market_date_label,
+    normalize_live_day,
     recent_observation_feed_summary,
     selected_live_city_configs,
 )
@@ -20,11 +22,25 @@ class LiveDashboardServiceTests(unittest.TestCase):
 
         self.assertEqual(cities, ["Phoenix", "Las Vegas", "San Antonio"])
 
+    def test_selected_live_city_configs_can_return_tomorrow_market_date(self):
+        configs = selected_live_city_configs("tomorrow")
+        cities = [config["city"] for config in configs]
+
+        self.assertEqual(cities, ["Phoenix", "Las Vegas", "San Antonio"])
+        self.assertEqual(len({config["market_date"] for config in configs}), 1)
+
     def test_live_city_config_matches_allowed_city_case_insensitive(self):
         config = live_city_config("san antonio")
 
         self.assertIsNotNone(config)
         self.assertEqual(config["city"], "San Antonio")
+
+    def test_market_date_label_collapses_single_date(self):
+        self.assertEqual(market_date_label([{"market_date": "2026-06-04"}]), "2026-06-04")
+
+    def test_normalize_live_day_only_allows_today_or_tomorrow(self):
+        self.assertEqual(normalize_live_day("tomorrow"), "tomorrow")
+        self.assertEqual(normalize_live_day("weird"), "today")
 
     def test_favorite_buckets_returns_winner_and_second_by_yes_price(self):
         market = {
@@ -129,26 +145,30 @@ class LiveDashboardServiceTests(unittest.TestCase):
     def test_cache_prevents_refetch_inside_ttl(self):
         calls = {"count": 0}
 
-        def fetcher():
+        def fetcher(day):
             calls["count"] += 1
-            return {"cities": [], "generated": calls["count"]}
+            return {"cities": [], "active_day": day, "generated": calls["count"]}
 
         now = datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc)
         cache = LiveDashboardCache(ttl_seconds=60, fetcher=fetcher, clock=lambda: now)
 
-        first = cache.get()
-        second = cache.get()
+        first = cache.get("today")
+        second = cache.get("today")
 
         self.assertEqual(first["generated"], 1)
         self.assertEqual(second["generated"], 1)
         self.assertEqual(calls["count"], 1)
 
+        tomorrow = cache.get("tomorrow")
+        self.assertEqual(tomorrow["active_day"], "tomorrow")
+        self.assertEqual(tomorrow["generated"], 2)
+
         later = now + timedelta(seconds=61)
         cache.clock = lambda: later
-        third = cache.get()
+        third = cache.get("today")
 
-        self.assertEqual(third["generated"], 2)
-        self.assertEqual(calls["count"], 2)
+        self.assertEqual(third["generated"], 3)
+        self.assertEqual(calls["count"], 3)
 
     def test_temp_meter_cache_uses_three_second_city_cache(self):
         calls = {"count": 0}
@@ -178,13 +198,31 @@ class LiveDashboardAppTests(unittest.TestCase):
     def test_dashboard_and_api_are_public(self):
         import live_app
 
-        live_app.live_cache.value = {"cities": [], "last_updated": "now", "next_refresh_eta": "soon"}
+        live_app.live_cache.values = {
+            "today": {"cities": [], "active_day": "today", "last_updated": "now", "next_refresh_eta": "soon"}
+        }
+        live_app.live_cache.fetched_at = {}
         client = TestClient(live_app.app)
 
         self.assertEqual(client.get("/").status_code, 200)
         response = client.get("/api/live")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["cities"], [])
+        self.assertEqual(response.json()["active_day"], "today")
+
+    def test_api_live_accepts_tomorrow_tab(self):
+        import live_app
+
+        live_app.live_cache.values = {
+            "tomorrow": {"cities": [], "active_day": "tomorrow", "market_date_label": "2026-06-04"}
+        }
+        live_app.live_cache.fetched_at = {}
+        client = TestClient(live_app.app)
+
+        response = client.get("/api/live?day=tomorrow")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["active_day"], "tomorrow")
 
     def test_temp_meter_api_returns_city_payload(self):
         import live_app
@@ -223,6 +261,12 @@ class LiveDashboardAppTests(unittest.TestCase):
 
         html = live_app._dashboard_html()
 
+        self.assertIn("dateBanner", html)
+        self.assertIn("Today", html)
+        self.assertIn("Tomorrow", html)
+        self.assertIn("Tomorrow tab uses NWS forecast", html)
+        self.assertIn("forecastOnly", html)
+        self.assertIn("/api/live?day=", html)
         self.assertIn("Open Live Temp Meter", html)
         self.assertIn("Live Temp Meter", html)
         self.assertIn("setInterval(refreshOpenTempMeters, 3000)", html)

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from config import CITY_CONFIGS
+from config import CITY_CONFIGS, city_configs_for_date, next_market_date
 from decision_layer import enrich_decision_layer
 from kalshi_api import fetch_kalshi_api_observation
 from scoring import score_market
@@ -14,14 +14,15 @@ DEFAULT_CACHE_TTL_SECONDS = 60
 LIVE_TEMP_METER_TTL_SECONDS = 3
 
 
-def selected_live_city_configs() -> list[dict[str, Any]]:
+def selected_live_city_configs(day: str = "today") -> list[dict[str, Any]]:
     wanted = set(LIVE_CITY_NAMES)
-    return [config for config in CITY_CONFIGS if config["city"] in wanted]
+    configs = CITY_CONFIGS if day != "tomorrow" else city_configs_for_date(next_market_date())
+    return [config for config in configs if config["city"] in wanted]
 
 
-def live_city_config(city_name: str) -> dict[str, Any] | None:
+def live_city_config(city_name: str, day: str = "today") -> dict[str, Any] | None:
     normalized = city_name.strip().lower()
-    for config in selected_live_city_configs():
+    for config in selected_live_city_configs(day):
         if config["city"].lower() == normalized:
             return config
     return None
@@ -86,6 +87,15 @@ def build_city_payload(
     }
 
 
+def market_date_label(cities: list[dict[str, Any]]) -> str:
+    dates = sorted({str(city.get("market_date")) for city in cities if city.get("market_date")})
+    if not dates:
+        return "unknown"
+    if len(dates) == 1:
+        return dates[0]
+    return f"{dates[0]} to {dates[-1]}"
+
+
 def recent_observation_feed_summary(weather: dict[str, Any]) -> dict[str, Any]:
     points = [
         point
@@ -118,16 +128,20 @@ def recent_observation_feed_summary(weather: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def collect_live_payload() -> dict[str, Any]:
+def collect_live_payload(day: str = "today") -> dict[str, Any]:
+    day = normalize_live_day(day)
     generated_at = _now_utc()
+    configs = selected_live_city_configs(day)
     cities = []
-    for city_config in selected_live_city_configs():
+    for city_config in configs:
         weather = fetch_weather(city_config)
         market = fetch_kalshi_api_observation(city_config)
         cities.append(build_city_payload(city_config, weather, market))
     return {
         "generated_at": generated_at.isoformat(),
         "last_updated": generated_at.isoformat(),
+        "active_day": day,
+        "market_date_label": market_date_label(configs),
         "cities": cities,
         "research_only": True,
         "refresh_seconds": DEFAULT_CACHE_TTL_SECONDS,
@@ -189,27 +203,29 @@ class LiveDashboardCache:
     def __init__(
         self,
         ttl_seconds: int = DEFAULT_CACHE_TTL_SECONDS,
-        fetcher: Callable[[], dict[str, Any]] = collect_live_payload,
+        fetcher: Callable[[str], dict[str, Any]] = collect_live_payload,
         clock: Callable[[], datetime] = _now_utc,
     ) -> None:
         self.ttl_seconds = ttl_seconds
         self.fetcher = fetcher
         self.clock = clock
-        self.value: dict[str, Any] | None = None
-        self.fetched_at: datetime | None = None
+        self.values: dict[str, dict[str, Any]] = {}
+        self.fetched_at: dict[str, datetime] = {}
 
-    def get(self) -> dict[str, Any]:
+    def get(self, day: str = "today") -> dict[str, Any]:
         now = self.clock()
-        if self.value is not None and self.fetched_at is None:
-            return self.value
-        if self.value is None or self.fetched_at is None or now - self.fetched_at >= timedelta(seconds=self.ttl_seconds):
-            self.value = self.fetcher()
-            self.fetched_at = now
-        return self._with_cache_metadata(now)
+        key = normalize_live_day(day)
+        if key in self.values and key not in self.fetched_at:
+            return self.values[key]
+        fetched_at = self.fetched_at.get(key)
+        if key not in self.values or fetched_at is None or now - fetched_at >= timedelta(seconds=self.ttl_seconds):
+            self.values[key] = self.fetcher(key)
+            self.fetched_at[key] = now
+        return self._with_cache_metadata(key, now)
 
-    def _with_cache_metadata(self, now: datetime) -> dict[str, Any]:
-        payload = dict(self.value or {})
-        next_refresh = (self.fetched_at or now) + timedelta(seconds=self.ttl_seconds)
+    def _with_cache_metadata(self, key: str, now: datetime) -> dict[str, Any]:
+        payload = dict(self.values.get(key) or {})
+        next_refresh = self.fetched_at.get(key, now) + timedelta(seconds=self.ttl_seconds)
         payload["cache_ttl_seconds"] = self.ttl_seconds
         payload["next_refresh_eta"] = next_refresh.isoformat()
         return payload
@@ -254,6 +270,10 @@ def _bucket_payload(contract: dict[str, Any] | None) -> dict[str, Any] | None:
         "high_f": contract.get("high_f"),
         "ticker": contract.get("ticker"),
     }
+
+
+def normalize_live_day(day: str) -> str:
+    return "tomorrow" if str(day).strip().lower() == "tomorrow" else "today"
 
 
 def _history_is_ahead(endpoint_time: Any, history_time: Any) -> bool:

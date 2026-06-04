@@ -21,8 +21,8 @@ def dashboard() -> HTMLResponse:
 
 
 @app.get("/api/live")
-def api_live() -> JSONResponse:
-    return JSONResponse(live_cache.get())
+def api_live(day: str = "today") -> JSONResponse:
+    return JSONResponse(live_cache.get(day))
 
 
 @app.get("/api/temp-meter")
@@ -64,6 +64,17 @@ def _dashboard_html() -> str:
         <img src="https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=&slug=jeanmatias&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff" alt="Buy me a coffee">
       </a>
     </section>
+    <section id="dateBanner" class="dateBanner">
+      <div>
+        <span>Analyzing</span>
+        <strong id="bannerDate">Loading market date</strong>
+      </div>
+      <p id="bannerNote">Today uses live station observations. Tomorrow is forecast and market-board only.</p>
+    </section>
+    <nav class="tabs" aria-label="Market day tabs">
+      <button class="tabButton active" type="button" data-day="today">Today</button>
+      <button class="tabButton" type="button" data-day="tomorrow">Tomorrow</button>
+    </nav>
     <section id="summary" class="summary"></section>
     <section id="cards" class="cards"></section>
   </main>
@@ -167,6 +178,15 @@ p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
   white-space: nowrap;
 }
 .finalToggle:hover { border-color: var(--accent); }
+.forecastOnly {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  padding: 8px 10px;
+  white-space: nowrap;
+}
 .finalPanel {
   background: rgba(69, 200, 216, 0.07);
   border: 1px solid rgba(69, 200, 216, 0.30);
@@ -317,6 +337,38 @@ p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
   font-weight: 800;
 }
 .supportTop img { display: block; height: 38px; max-width: 210px; }
+.dateBanner {
+  align-items: center;
+  background: linear-gradient(135deg, rgba(69, 200, 216, 0.16), rgba(212, 155, 49, 0.10));
+  border: 1px solid rgba(69, 200, 216, 0.30);
+  border-radius: 8px;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding: 13px 14px;
+}
+.dateBanner span { color: var(--muted); display: block; font-size: 11px; font-weight: 800; text-transform: uppercase; }
+.dateBanner strong { color: var(--ink); display: block; font-size: 20px; margin-top: 2px; }
+.dateBanner p { color: var(--muted); font-size: 13px; margin: 0; max-width: 560px; text-align: right; }
+.tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+.tabButton {
+  background: rgba(16, 24, 32, 0.78);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 900;
+  min-height: 42px;
+  padding: 9px 16px;
+}
+.tabButton.active {
+  background: rgba(69, 200, 216, 0.16);
+  border-color: var(--accent);
+  color: var(--ink);
+}
 @media (max-width: 850px) {
   .topbar { display: block; }
   .statusDeck { margin-top: 12px; }
@@ -325,6 +377,8 @@ p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
   .metrics { grid-template-columns: repeat(2, 1fr); }
   .liveMeterGrid { grid-template-columns: repeat(2, 1fr); }
   .finalGrid { grid-template-columns: repeat(2, 1fr); }
+  .dateBanner { align-items: flex-start; flex-direction: column; }
+  .dateBanner p { text-align: left; }
   .supportTop { align-items: flex-start; flex-direction: column; }
 }
 @media (max-width: 560px) {
@@ -345,8 +399,12 @@ const cards = document.getElementById('cards');
 const summary = document.getElementById('summary');
 const statusText = document.getElementById('statusText');
 const updatedText = document.getElementById('updatedText');
+const bannerDate = document.getElementById('bannerDate');
+const bannerNote = document.getElementById('bannerNote');
+const tabButtons = document.querySelectorAll('.tabButton');
 let nextRefreshAt = null;
 let refreshInFlight = false;
+let activeDay = 'today';
 const openFinalCities = new Set();
 const tempMeterInFlight = new Set();
 const tempMeterNextPullAt = new Map();
@@ -479,7 +537,9 @@ function tone(city) {
 function render(payload) {
   const updated = payload.last_updated || payload.generated_at || 'unknown';
   nextRefreshAt = payload.next_refresh_eta ? new Date(payload.next_refresh_eta) : null;
+  activeDay = payload.active_day || activeDay;
   statusText.textContent = new Date(updated).toLocaleTimeString();
+  renderBanner(payload);
   updateCountdown();
   renderSummary(payload);
   cards.innerHTML = (payload.cities || []).map(city => `
@@ -492,7 +552,7 @@ function render(payload) {
           </div>
           <div class="cardActions">
             <span class="badge">${escapeHtml(city.reachability_label || 'n/a')}</span>
-            <button class="finalToggle" type="button" data-final-city="${escapeAttribute(city.city)}">${openFinalCities.has(city.city) ? 'Hide Live Temp Meter' : 'Open Live Temp Meter'}</button>
+            ${activeDay === 'today' ? `<button class="finalToggle" type="button" data-final-city="${escapeAttribute(city.city)}">${openFinalCities.has(city.city) ? 'Hide Live Temp Meter' : 'Open Live Temp Meter'}</button>` : '<span class="forecastOnly">Forecast-only</span>'}
           </div>
         </div>
         ${finalMinutesPanel(city)}
@@ -532,7 +592,21 @@ function render(payload) {
   `).join('');
 }
 
+function renderBanner(payload) {
+  const dayLabel = payload.active_day === 'tomorrow' ? 'Tomorrow' : 'Today';
+  bannerDate.textContent = `${dayLabel} market: ${payload.market_date_label || 'unknown'}`;
+  bannerNote.textContent = payload.active_day === 'tomorrow'
+    ? 'Tomorrow tab uses NWS forecast plus Kalshi market board. Live station high resets when that date starts.'
+    : 'Today tab uses live NWS station observations, recent high-so-far, forecast, and Kalshi market board.';
+  tabButtons.forEach(button => {
+    button.classList.toggle('active', button.dataset.day === payload.active_day);
+  });
+}
+
 function finalMinutesPanel(city) {
+  if (activeDay !== 'today') {
+    return '';
+  }
   return `
     <div class="finalPanel" data-final-panel="${escapeAttribute(city.city)}">
       ${liveTempMeter(city)}
@@ -649,6 +723,20 @@ cards.addEventListener('click', event => {
   if (open) refreshTempMeter(button.dataset.finalCity);
 });
 
+tabButtons.forEach(button => {
+  button.addEventListener('click', () => {
+    const nextDay = button.dataset.day || 'today';
+    if (nextDay === activeDay && !refreshInFlight) return;
+    activeDay = nextDay;
+    openFinalCities.clear();
+    tempMeterNextPullAt.clear();
+    tabButtons.forEach(tab => tab.classList.toggle('active', tab.dataset.day === activeDay));
+    statusText.textContent = 'Loading';
+    updatedText.textContent = activeDay === 'tomorrow' ? 'forecast tab' : '60s backend';
+    load();
+  });
+});
+
 async function refreshTempMeter(cityName) {
   if (!cityName || !openFinalCities.has(cityName) || tempMeterInFlight.has(cityName)) return;
   tempMeterInFlight.add(cityName);
@@ -752,7 +840,7 @@ async function load() {
   if (refreshInFlight) return;
   refreshInFlight = true;
   try {
-    const response = await fetch('/api/live', {cache: 'no-store'});
+    const response = await fetch(`/api/live?day=${encodeURIComponent(activeDay)}`, {cache: 'no-store'});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     render(await response.json());
   } catch (error) {
