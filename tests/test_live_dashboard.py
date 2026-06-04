@@ -94,6 +94,10 @@ class LiveDashboardServiceTests(unittest.TestCase):
             "market_local_time": "2026-06-03T12:00:00-07:00",
             "active_heating_window": True,
             "current_temp_f": 100.0,
+            "fast_metar_temp_f": 101.0,
+            "fast_metar_time": "2026-06-03T18:01:00.000Z",
+            "fast_metar_raw": "KPHX 031801Z AUTO 00000KT 10SM CLR 38/02 A2992",
+            "fast_feed_source": "AviationWeather METAR",
             "raw_high_so_far_f": 100.4,
             "high_so_far_f": 100.0,
             "heating_rate_f_per_hour": 2.0,
@@ -128,6 +132,9 @@ class LiveDashboardServiceTests(unittest.TestCase):
         self.assertEqual(payload["current_temp_f"], 100.0)
         self.assertEqual(payload["forecast_high_f"], 106.0)
         self.assertEqual(payload["latest_endpoint_temp_f"], 100.0)
+        self.assertEqual(payload["fast_metar_temp_f"], 101.0)
+        self.assertEqual(payload["fast_metar_time"], "2026-06-03T18:01:00.000Z")
+        self.assertEqual(payload["fast_feed_source"], "AviationWeather METAR")
         self.assertEqual(payload["recent_observation_max_f"], 100.4)
         self.assertEqual(payload["latest_history_time"], "2026-06-03T18:00:00+00:00")
         self.assertTrue(payload["latest_feed_lag_warning"])
@@ -261,6 +268,8 @@ class LiveDashboardAppTests(unittest.TestCase):
                 "city": "Phoenix",
                 "ok": True,
                 "current_temp_f": 100.0,
+                "fast_metar_temp_f": 101.0,
+                "fast_feed_source": "AviationWeather METAR",
                 "recent_observation_max_f": 101.0,
             }
         }
@@ -274,6 +283,7 @@ class LiveDashboardAppTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["city"], "Phoenix")
+        self.assertEqual(response.json()["fast_metar_temp_f"], 101.0)
         self.assertEqual(response.json()["cache_ttl_seconds"], 3)
 
     def test_dashboard_script_auto_refreshes_when_countdown_expires(self):
@@ -298,6 +308,10 @@ class LiveDashboardAppTests(unittest.TestCase):
         self.assertIn("/api/live?day=", html)
         self.assertIn("Open Live Temp Meter", html)
         self.assertIn("Live Temp Meter", html)
+        self.assertIn("Fast METAR Feed", html)
+        self.assertIn("AviationWeather METAR", html)
+        self.assertIn("fast_metar_temp_f", html)
+        self.assertIn("fast_metar_time", html)
         self.assertIn("tempMeterPollSeconds", html)
         self.assertIn("syncPollTimers", html)
         self.assertIn("/api/temp-meter?city=", html)

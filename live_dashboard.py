@@ -10,7 +10,7 @@ from config import CITY_CONFIGS, _with_market_date_suffix, city_configs_for_date
 from decision_layer import enrich_decision_layer
 from kalshi_api import fetch_kalshi_api_observation
 from scoring import score_market
-from weather_sources import fetch_nws_latest_observation, fetch_nws_observation_history, fetch_weather
+from weather_sources import fetch_fast_metar_observation, fetch_nws_latest_observation, fetch_nws_observation_history, fetch_weather
 
 
 def _env_int(name: str, default: int) -> int:
@@ -87,6 +87,11 @@ def build_city_payload(
         "current_temp_f": scored.get("current_temp_f"),
         "latest_endpoint_temp_f": weather.get("current_temp_f"),
         "latest_endpoint_time": weather.get("observation_time"),
+        "fast_metar_temp_f": weather.get("fast_metar_temp_f"),
+        "fast_metar_time": weather.get("fast_metar_time"),
+        "fast_metar_raw": weather.get("fast_metar_raw"),
+        "fast_feed_source": weather.get("fast_feed_source"),
+        "fast_feed_url": weather.get("fast_feed_url"),
         "latest_history_temp_f": feed_summary["latest_history_temp_f"],
         "latest_history_time": feed_summary["latest_history_time"],
         "recent_observation_points": feed_summary["recent_observation_points"],
@@ -200,6 +205,10 @@ def collect_live_temp_meter(city_name: str) -> dict[str, Any]:
     except Exception as exc:
         warnings.append(f"NWS latest observation unavailable: {exc}")
     try:
+        weather.update(fetch_fast_metar_observation(city_config["station_id"]))
+    except Exception as exc:
+        warnings.append(f"Fast METAR feed unavailable: {exc}")
+    try:
         weather.update(fetch_nws_observation_history(city_config))
     except Exception as exc:
         warnings.append(f"NWS observation history unavailable: {exc}")
@@ -214,6 +223,11 @@ def collect_live_temp_meter(city_name: str) -> dict[str, Any]:
         "ok": True,
         "current_temp_f": weather.get("current_temp_f"),
         "latest_endpoint_time": weather.get("observation_time"),
+        "fast_metar_temp_f": weather.get("fast_metar_temp_f"),
+        "fast_metar_time": weather.get("fast_metar_time"),
+        "fast_metar_raw": weather.get("fast_metar_raw"),
+        "fast_feed_source": weather.get("fast_feed_source"),
+        "fast_feed_url": weather.get("fast_feed_url"),
         "raw_high_so_far_f": raw_high,
         "high_so_far_f": rounded_high,
         "rounded_if_final_now_f": rounded_high,

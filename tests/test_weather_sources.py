@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime
 from unittest.mock import patch
 
-from weather_sources import fetch_nws_observation_history, parse_cli_report_text, parse_digital_dwml_forecast
+from weather_sources import fetch_fast_metar_observation, fetch_nws_observation_history, parse_cli_report_text, parse_digital_dwml_forecast
 from weather_sources import _fill_derived_weather
 from weather_sources import _market_day_utc_window
 from weather_sources import _round_official_temp
@@ -286,6 +286,24 @@ AVERAGE         64
 
         self.assertEqual(len(weather["recent_observation_points"]), 3)
         self.assertAlmostEqual(weather["heating_rate_f_per_hour"], 3.6, places=1)
+
+    def test_fetch_fast_metar_observation_uses_aviationweather_feed(self):
+        payload = [
+            {
+                "temp": 30.0,
+                "reportTime": "2026-06-04T15:40:00.000Z",
+                "rawOb": "KLAS 041540Z 00000KT 10SM CLR 30/08 A2992",
+            }
+        ]
+
+        with patch("weather_sources._get_json", return_value=payload) as get_json:
+            weather = fetch_fast_metar_observation("KLAS")
+
+        self.assertIn("aviationweather.gov/api/data/metar", get_json.call_args.args[0])
+        self.assertEqual(weather["fast_feed_source"], "AviationWeather METAR")
+        self.assertEqual(weather["fast_metar_temp_f"], 86.0)
+        self.assertEqual(weather["fast_metar_time"], "2026-06-04T15:40:00.000Z")
+        self.assertIn("KLAS 041540Z", weather["fast_metar_raw"])
 
     def test_stale_latest_observation_keeps_heating_window_active(self):
         weather = {

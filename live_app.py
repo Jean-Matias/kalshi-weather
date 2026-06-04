@@ -623,10 +623,12 @@ function finalMinutesPanel(city) {
       ${liveTempMeter(city)}
       <div class="finalGrid">
         <div class="finalItem"><span>Latest Endpoint</span><strong>${fmtTemp(city.latest_endpoint_temp_f ?? city.current_temp_f)}</strong></div>
+        <div class="finalItem"><span>Fast METAR Feed</span><strong>${fmtTemp(city.fast_metar_temp_f)}</strong></div>
         <div class="finalItem"><span>Recent Max</span><strong>${recentFeedMax(city)}</strong></div>
         <div class="finalItem"><span>If Final Now</span><strong>${escapeHtml(roundedOutcome(city))}</strong></div>
         <div class="finalItem"><span>Next Round Risk</span><strong>${escapeHtml(nextRoundDistance(city))}</strong></div>
         <div class="finalItem"><span>Latest Endpoint Time</span><strong>${escapeHtml(fmtEtTime(city.latest_endpoint_time))}</strong></div>
+        <div class="finalItem"><span>Fast Feed Time</span><strong>${escapeHtml(fmtEtTime(city.fast_metar_time))}</strong></div>
         <div class="finalItem"><span>Recent Feed Time</span><strong>${escapeHtml(fmtEtTime(city.latest_history_time || city.latest_observation_time))}</strong></div>
         <div class="finalItem"><span>Last Obs Age</span><strong class="obsAge" data-obs-time="${escapeAttribute(city.latest_history_time || city.latest_observation_time || '')}">${escapeHtml(lastObsAge({latest_observation_time: city.latest_history_time || city.latest_observation_time}))}</strong></div>
         <div class="finalItem"><span>Peak Status</span><strong class="peakStatus" data-peak-time="${escapeAttribute(city.forecast_high_time || '')}">${escapeHtml(peakStatus(city))}</strong></div>
@@ -644,16 +646,18 @@ function liveTempMeter(city) {
       <div class="liveMeterHead">
         <div>
           <div class="liveMeterTitle">Live Temp Meter</div>
-          <div class="liveMeterSub">Temp-only official NWS station check every ${tempMeterPollSeconds} seconds while this panel is open.</div>
+          <div class="liveMeterSub">Temp-only check every ${tempMeterPollSeconds} seconds while open. Fast feed is AviationWeather METAR; official feed is NWS.</div>
         </div>
         <div class="liveMeterPill">${escapeHtml(tempMeterPullText())}</div>
       </div>
       <div class="liveMeterGrid">
         <div class="liveMeterItem primary"><span>Latest Temp</span><strong data-meter-field="current">${fmtTemp(city.latest_endpoint_temp_f ?? city.current_temp_f)}</strong></div>
+        <div class="liveMeterItem primary"><span>Fast METAR Feed</span><strong data-meter-field="fast">${fmtTemp(city.fast_metar_temp_f)}</strong></div>
         <div class="liveMeterItem"><span>Recent Max</span><strong data-meter-field="recentMax">${recentFeedMax(city)}</strong></div>
         <div class="liveMeterItem"><span>Rounded Now</span><strong data-meter-field="rounded">${escapeHtml(roundedOutcome(city))}</strong></div>
         <div class="liveMeterItem"><span>Meter Refresh</span><strong data-meter-field="countdown">${escapeHtml(tempMeterCountdown(city.city))}</strong></div>
         <div class="liveMeterItem"><span>Latest Time ET</span><strong data-meter-field="endpointTime">${escapeHtml(fmtEtTime(city.latest_endpoint_time))}</strong></div>
+        <div class="liveMeterItem"><span>Fast Feed Time ET</span><strong data-meter-field="fastTime">${escapeHtml(fmtEtTime(city.fast_metar_time))}</strong></div>
         <div class="liveMeterItem"><span>Feed Time ET</span><strong data-meter-field="feedTime">${escapeHtml(fmtEtTime(city.latest_history_time || city.latest_observation_time))}</strong></div>
         <div class="liveMeterItem"><span>Last Obs Age</span><strong data-meter-field="age" data-meter-obs-time="${escapeAttribute(city.latest_history_time || city.latest_observation_time || '')}">${escapeHtml(lastObsAge({latest_observation_time: city.latest_history_time || city.latest_observation_time}))}</strong></div>
         <div class="liveMeterItem"><span>Status</span><strong data-meter-field="status">ready</strong></div>
@@ -780,9 +784,11 @@ function updateTempMeter(payload) {
   const meter = document.querySelector(`.liveMeter[data-meter-city="${cssEscape(cityName)}"]`);
   if (!meter) return;
   setMeterText(meter, 'current', fmtTemp(payload.current_temp_f));
+  setMeterText(meter, 'fast', fmtTemp(payload.fast_metar_temp_f));
   setMeterText(meter, 'recentMax', fmtTemp(payload.recent_observation_max_f ?? payload.raw_high_so_far_f));
   setMeterText(meter, 'rounded', payload.rounded_if_final_now_f === null || payload.rounded_if_final_now_f === undefined ? 'n/a' : `${Number(payload.rounded_if_final_now_f).toFixed(0)}F`);
   setMeterText(meter, 'endpointTime', fmtEtTime(payload.latest_endpoint_time));
+  setMeterText(meter, 'fastTime', fmtEtTime(payload.fast_metar_time));
   setMeterText(meter, 'feedTime', fmtEtTime(payload.latest_history_time));
   const age = meter.querySelector('[data-meter-field="age"]');
   if (age) {
@@ -840,6 +846,7 @@ function sourceLinks(city) {
   const links = [
     city.kalshi_url ? ['Kalshi', city.kalshi_url] : null,
     city.station_id ? ['NWS Obs', `https://api.weather.gov/stations/${encodeURIComponent(city.station_id)}/observations/latest`] : null,
+    city.fast_feed_url ? ['Fast METAR', city.fast_feed_url] : null,
     city.forecast_graph_url ? ['NWS Forecast', city.forecast_graph_url] : null
   ].filter(Boolean);
   if (!links.length) return '';

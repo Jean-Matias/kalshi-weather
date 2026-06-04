@@ -34,6 +34,12 @@ def fetch_weather(city_config: dict[str, Any]) -> dict[str, Any]:
             warnings.append(f"NWS latest observation unavailable: {exc}")
 
         try:
+            fast_metar = fetch_fast_metar_observation(city_config["station_id"])
+            _merge_weather_update(weather, fast_metar)
+        except Exception as exc:
+            warnings.append(f"Fast METAR feed unavailable: {exc}")
+
+        try:
             history = fetch_nws_observation_history(city_config)
             _merge_weather_update(weather, history)
         except Exception as exc:
@@ -74,6 +80,32 @@ def fetch_nws_latest_observation(station_id: str) -> dict[str, Any]:
         "wind_direction_deg": _value(props, "windDirection"),
         "cloud_text": props.get("textDescription"),
         "observation_time": props.get("timestamp"),
+        "source_urls": [url],
+    }
+
+
+def fetch_fast_metar_observation(station_id: str) -> dict[str, Any]:
+    url = f"https://aviationweather.gov/api/data/metar?ids={urllib.parse.quote(station_id)}&format=json"
+    data = _get_json(url)
+    if not isinstance(data, list) or not data:
+        return {
+            "fast_metar_temp_f": None,
+            "fast_metar_time": None,
+            "fast_metar_raw": None,
+            "fast_feed_source": "AviationWeather METAR",
+            "fast_feed_url": url,
+            "source_urls": [url],
+        }
+
+    report = data[0]
+    temp_c = _to_float(report.get("temp"))
+    report_time = report.get("reportTime") or _epoch_to_iso(report.get("obsTime"))
+    return {
+        "fast_metar_temp_f": _c_to_f(temp_c),
+        "fast_metar_time": report_time,
+        "fast_metar_raw": report.get("rawOb"),
+        "fast_feed_source": "AviationWeather METAR",
+        "fast_feed_url": url,
         "source_urls": [url],
     }
 
@@ -499,6 +531,15 @@ def _parse_time(value: str | None) -> datetime | None:
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
+        return None
+
+
+def _epoch_to_iso(value: Any) -> str | None:
+    try:
+        if value is None:
+            return None
+        return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    except (TypeError, ValueError, OSError):
         return None
 
 
