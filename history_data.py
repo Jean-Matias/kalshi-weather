@@ -55,6 +55,7 @@ def load_kalshi_candle_history(
     days: int = 3,
     now: datetime | None = None,
     fetch_json: Any | None = None,
+    db_path: Path = DATABASE_PATH,
 ) -> dict[str, Any]:
     base_config = _city_config(city)
     if not base_config:
@@ -74,7 +75,8 @@ def load_kalshi_candle_history(
             end_local = local_now
         else:
             end_local = start_local + timedelta(days=1)
-        day_payloads.append(_kalshi_candle_day(config, start_local, end_local, fetch))
+        actual = _actual_outcome_from_snapshots(city, market_date, db_path)
+        day_payloads.append(_kalshi_candle_day(config, start_local, end_local, fetch, actual))
     return {"city": city, "days": day_payloads, "source": "kalshi_event_candlesticks"}
 
 
@@ -83,6 +85,7 @@ def _kalshi_candle_day(
     start_local: datetime,
     end_local: datetime,
     fetch_json: Any,
+    actual: dict[str, Any],
 ) -> dict[str, Any]:
     event_ticker = config["kalshi_event_ticker"]
     series_ticker = _series_ticker(event_ticker)
@@ -100,6 +103,7 @@ def _kalshi_candle_day(
             series_ticker=series_ticker,
             contracts=contracts,
             candles_payload=candles_payload,
+            actual=actual,
         )
         day["api_url"] = candles_url
         return day
@@ -112,6 +116,10 @@ def _kalshi_candle_day(
             "bucket_labels": [],
             "latest_buckets": [],
             "series": [],
+            "actual_outcome_f": actual.get("actual_outcome_f"),
+            "actual_raw_f": actual.get("actual_raw_f"),
+            "actual_source": actual.get("actual_source"),
+            "market_story": _market_story([], actual),
             "warnings": [f"Kalshi candle history unavailable: {exc}"],
         }
 
@@ -123,6 +131,7 @@ def _day_from_kalshi_candles(
     series_ticker: str,
     contracts: list[dict[str, Any]],
     candles_payload: dict[str, Any],
+    actual: dict[str, Any],
 ) -> dict[str, Any]:
     contract_by_ticker = {contract["ticker"]: contract for contract in contracts if contract.get("ticker")}
     bucket_labels = [contract["label"] for contract in contracts if contract.get("label")]
@@ -177,9 +186,140 @@ def _day_from_kalshi_candles(
         "point_count": len(series),
         "bucket_labels": bucket_labels,
         "latest_buckets": latest_buckets,
+        "actual_outcome_f": actual.get("actual_outcome_f"),
+        "actual_raw_f": actual.get("actual_raw_f"),
+        "actual_source": actual.get("actual_source"),
+        "market_story": _market_story(series, actual),
         "series": series,
         "warnings": [],
     }
+
+
+def _actual_outcome_from_snapshots(city: str, market_date: str, db_path: Path) -> dict[str, Any]:
+    if not db_path.exists():
+        return {"actual_outcome_f": None, "actual_raw_f": None, "actual_source": "not_available"}
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        try:
+            rows = list(
+                conn.execute(
+                    """
+                    select captured_at, payload_json
+                    from weather_snapshots
+                    where city = ?
+                    order by captured_at desc
+                    """,
+                    (city,),
+                )
+            )
+        except sqlite3.OperationalError:
+            return {"actual_outcome_f": None, "actual_raw_f": None, "actual_source": "not_available"}
+        candidates = []
+        for row in rows:
+            weather = _payload(row)
+            row_date = weather.get("market_date") or weather.get("cli_report_date")
+            if row_date == market_date:
+                candidates.append(weather)
+        if not candidates:
+            return {"actual_outcome_f": None, "actual_raw_f": None, "actual_source": "not_available"}
+        weather = candidates[0]
+        raw = _first_number(weather.get("raw_high_so_far_f"), weather.get("current_temp_f"))
+        cli = _to_float(weather.get("cli_high_f")) if weather.get("cli_report_date") == market_date else None
+        rounded = _first_number(weather.get("high_so_far_f"), cli)
+        if raw is not None:
+            return {
+                "actual_outcome_f": round(raw),
+                "actual_raw_f": raw,
+                "actual_source": "station_high_so_far",
+            }
+        if cli is not None:
+            return {
+                "actual_outcome_f": cli,
+                "actual_raw_f": cli,
+                "actual_source": "nws_cli",
+            }
+        return {
+            "actual_outcome_f": rounded,
+            "actual_raw_f": rounded,
+            "actual_source": "weather_snapshot",
+        }
+    finally:
+        conn.close()
+
+
+def _market_story(series: list[dict[str, Any]], actual: dict[str, Any]) -> dict[str, Any]:
+    forecasts = [
+        (index, _to_float(point.get("kalshi_forecast_f")))
+        for index, point in enumerate(series)
+        if _to_float(point.get("kalshi_forecast_f")) is not None
+    ]
+    if not forecasts:
+        return {
+            "open_forecast_f": None,
+            "peak_forecast_f": None,
+            "close_forecast_f": None,
+            "pump_f": None,
+            "dump_f": None,
+            "close_vs_actual_f": None,
+            "peak_vs_actual_f": None,
+            "label": "No market history",
+            "note": "No Kalshi candle movement was available for this day.",
+        }
+    open_index, open_forecast = forecasts[0]
+    peak_index, peak_forecast = max(forecasts, key=lambda item: item[1])
+    close_index, close_forecast = forecasts[-1]
+    actual_f = _to_float(actual.get("actual_outcome_f"))
+    pump = round(peak_forecast - open_forecast, 1)
+    dump = round(peak_forecast - close_forecast, 1)
+    close_vs_actual = round(close_forecast - actual_f, 1) if actual_f is not None else None
+    peak_vs_actual = round(peak_forecast - actual_f, 1) if actual_f is not None else None
+    label = "Actual pending"
+    if actual_f is not None:
+        if close_vs_actual >= 1:
+            label = "Closed hotter than actual"
+        elif close_vs_actual <= -1:
+            label = "Closed colder than actual"
+        else:
+            label = "Closed near actual"
+        if peak_vs_actual is not None and peak_vs_actual >= 2 and dump >= 1.5:
+            label = "Hot pump then dump"
+    elif pump >= 2 and dump >= 1.5:
+        label = "Pump then dump"
+    elif pump >= 2:
+        label = "Market heated up"
+    note = _market_story_note(label, open_forecast, peak_forecast, close_forecast, actual_f, pump, dump)
+    return {
+        "open_forecast_f": round(open_forecast, 1),
+        "open_time": series[open_index].get("captured_at"),
+        "peak_forecast_f": round(peak_forecast, 1),
+        "peak_time": series[peak_index].get("captured_at"),
+        "close_forecast_f": round(close_forecast, 1),
+        "close_time": series[close_index].get("captured_at"),
+        "pump_f": pump,
+        "dump_f": dump,
+        "close_vs_actual_f": close_vs_actual,
+        "peak_vs_actual_f": peak_vs_actual,
+        "label": label,
+        "note": note,
+    }
+
+
+def _market_story_note(
+    label: str,
+    open_forecast: float,
+    peak_forecast: float,
+    close_forecast: float,
+    actual_f: float | None,
+    pump: float,
+    dump: float,
+) -> str:
+    actual_text = f"; actual was {actual_f:.0f}F" if actual_f is not None else "; actual not available yet"
+    return (
+        f"{label}: Kalshi opened near {open_forecast:.1f}F, "
+        f"pumped to {peak_forecast:.1f}F (+{pump:.1f}F), "
+        f"then finished near {close_forecast:.1f}F (-{dump:.1f}F from peak){actual_text}."
+    )
 
 
 def _candles_url(series_ticker: str, event_ticker: str, start_local: datetime, end_local: datetime) -> str:

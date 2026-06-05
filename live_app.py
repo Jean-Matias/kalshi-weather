@@ -481,6 +481,34 @@ p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
 }
 .bucketPill strong { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bucketPill span { color: var(--good); white-space: nowrap; }
+.storyGrid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(5, 1fr);
+  margin: 10px 0;
+}
+.storyMetric {
+  background: rgba(8, 13, 18, 0.62);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  min-width: 0;
+  padding: 9px;
+}
+.storyMetric span { color: var(--muted); display: block; font-size: 10px; font-weight: 900; text-transform: uppercase; }
+.storyMetric strong { display: block; font-size: 15px; margin-top: 4px; overflow-wrap: anywhere; }
+.storyNote {
+  background: rgba(69, 200, 216, 0.08);
+  border: 1px solid rgba(69, 200, 216, 0.22);
+  border-radius: 7px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 820;
+  line-height: 1.45;
+  margin: 0 0 10px;
+  padding: 9px;
+}
+.storyNote.hot { background: rgba(255, 107, 94, 0.10); border-color: rgba(255, 107, 94, 0.30); }
+.storyNote.near { background: rgba(86, 212, 148, 0.09); border-color: rgba(86, 212, 148, 0.25); }
 .historyEmpty {
   align-items: center;
   border: 1px dashed var(--line);
@@ -508,12 +536,14 @@ p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
   .historyHead label { width: 100%; }
   .historyLegend { justify-content: flex-start; }
   .bucketLeaderboard { grid-template-columns: 1fr; }
+  .storyGrid { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 560px) {
   .shell { padding: 14px; }
   .metrics { grid-template-columns: 1fr; }
   .card-head { display: block; }
   .cardActions { align-items: flex-start; margin-top: 10px; }
+  .storyGrid { grid-template-columns: 1fr; }
 }
 """
 
@@ -1039,13 +1069,35 @@ function historyDayCard(day) {
         </div>
         <div class="historyLegend">
           <span class="legendItem"><span class="legendSwatch kalshi"></span>Crowd forecast</span>
+          <span class="legendItem"><span class="legendSwatch actual"></span>Actual</span>
           <span class="legendItem"><span class="legendSwatch bucket"></span>Latest buckets</span>
         </div>
       </div>
+      ${historyStory(day)}
       <div class="historyChart">${historyChartSvg(day)}</div>
       ${bucketLeaderboard(day)}
     </article>
   `;
+}
+
+function historyStory(day) {
+  const story = day.market_story || {};
+  const label = story.label || 'Market story';
+  const noteTone = label.includes('Hot') || label.includes('hotter') ? 'hot' : label.includes('near') ? 'near' : '';
+  return `
+    <div class="storyNote ${noteTone}">${escapeHtml(story.note || 'Market story unavailable for this day.')}</div>
+    <div class="storyGrid">
+      ${storyMetric('Actual', day.actual_outcome_f === null || day.actual_outcome_f === undefined ? 'pending' : `${Number(day.actual_outcome_f).toFixed(0)}F`)}
+      ${storyMetric('Open', fmtTemp(story.open_forecast_f))}
+      ${storyMetric('Hottest', fmtTemp(story.peak_forecast_f))}
+      ${storyMetric('Close', fmtTemp(story.close_forecast_f))}
+      ${storyMetric('Dump', story.dump_f === null || story.dump_f === undefined ? 'n/a' : `-${Number(story.dump_f).toFixed(1)}F`)}
+    </div>
+  `;
+}
+
+function storyMetric(label, value) {
+  return `<div class="storyMetric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
 }
 
 function historyChartSvg(day) {
@@ -1060,12 +1112,15 @@ function historyChartSvg(day) {
   const top = 18;
   const bottom = 222;
   const x = index => points.length === 1 ? left : left + (index / (points.length - 1)) * (width - left - right);
+  const actual = Number(day.actual_outcome_f);
   const tempValues = points.map(point => Number(point.kalshi_forecast_f)).filter(Number.isFinite);
+  if (Number.isFinite(actual)) tempValues.push(actual);
   const tempMin = tempValues.length ? Math.floor(Math.min(...tempValues) - 1) : 0;
   const tempMax = tempValues.length ? Math.ceil(Math.max(...tempValues) + 1) : 1;
   const tempSpan = Math.max(1, tempMax - tempMin);
   const yTemp = value => bottom - ((Number(value) - tempMin) / tempSpan) * (bottom - top);
   const kalshiPath = historyLinePath(points, point => point.kalshi_forecast_f, yTemp, x);
+  const actualY = Number.isFinite(actual) ? yTemp(actual) : null;
   const area = kalshiPath ? `${kalshiPath} L ${x(points.length - 1).toFixed(1)} ${bottom} L ${x(0).toFixed(1)} ${bottom} Z` : '';
   const last = points[points.length - 1];
 
@@ -1079,6 +1134,7 @@ function historyChartSvg(day) {
       <text class="histLabel" x="${width - 54}" y="${top + 8}">${tempMax}F</text>
       <text class="histLabel" x="${width - 54}" y="${bottom - 4}">${tempMin}F</text>
       ${area ? `<path class="tempGraphArea" d="${area}"></path>` : ''}
+      ${actualY !== null ? `<line class="histLine histActual" x1="${left}" x2="${width - right}" y1="${actualY.toFixed(1)}" y2="${actualY.toFixed(1)}"></line><text class="histLabel" x="${left + 4}" y="${Math.max(top + 11, actualY - 5).toFixed(1)}">actual ${actual.toFixed(0)}F</text>` : ''}
       ${kalshiPath ? `<path class="histLine histKalshi" d="${kalshiPath}"></path>` : ''}
       ${historyCircles(points, point => point.kalshi_forecast_f, yTemp, x, '', 'kalshi', point => `${historyPointTime(point)}\\nCrowd forecast: ${Number(point.kalshi_forecast_f).toFixed(1)}F\\nFavorite: ${point.favorite_bucket || 'n/a'} @ ${Number(point.favorite_price || 0).toFixed(0)}c`)}
       ${last && Number.isFinite(Number(last.kalshi_forecast_f)) ? `<circle class="tempGraphHighPoint" cx="${x(points.length - 1).toFixed(1)}" cy="${yTemp(last.kalshi_forecast_f).toFixed(1)}" r="7"><title>${escapeHtml(`Latest\\nCrowd forecast: ${Number(last.kalshi_forecast_f).toFixed(1)}F\\nFavorite: ${last.favorite_bucket || 'n/a'} @ ${Number(last.favorite_price || 0).toFixed(0)}c`)}</title></circle>` : ''}
