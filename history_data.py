@@ -21,8 +21,11 @@ def load_historical_payload(
         close_conn = True
     conn.row_factory = sqlite3.Row
     try:
-        market_rows = _rows(conn, "market_snapshots", city)
-        weather_rows = _rows(conn, "weather_snapshots", city)
+        try:
+            market_rows = _rows(conn, "market_snapshots", city)
+            weather_rows = _rows(conn, "weather_snapshots", city)
+        except sqlite3.OperationalError:
+            return {"city": city, "days": []}
         weather_by_time = {row["captured_at"]: _payload(row) for row in weather_rows}
         market_dates = _latest_market_dates(market_rows, weather_by_time, days)
         return {

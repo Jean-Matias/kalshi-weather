@@ -112,6 +112,15 @@ class HistoryDataTests(unittest.TestCase):
         self.assertEqual(payload["city"], "Phoenix")
         self.assertEqual(payload["days"], [])
 
+    def test_load_historical_payload_handles_missing_tables(self):
+        conn = sqlite3.connect(":memory:")
+        self.addCleanup(conn.close)
+
+        payload = load_historical_payload("Phoenix", conn=conn, days=3)
+
+        self.assertEqual(payload["city"], "Phoenix")
+        self.assertEqual(payload["days"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
