@@ -249,6 +249,7 @@ AVERAGE         64
 
         self.assertEqual(weather["raw_high_so_far_f"], 73.9)
         self.assertEqual(weather["high_so_far_f"], 74.0)
+        self.assertEqual(weather["raw_high_so_far_time"], "2026-05-24T20:53:00+00:00")
         self.assertEqual(weather["latest_observation_time"], "2026-05-24T20:53:00+00:00")
 
     def test_history_includes_recent_points_and_heating_rate(self):

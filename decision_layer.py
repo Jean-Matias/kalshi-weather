@@ -38,6 +38,7 @@ def enrich_decision_layer(row: dict[str, Any]) -> dict[str, Any]:
     )
     alignment = _market_weather_alignment(low, high, forecast)
     false_pump = _false_pump_warning(row, alignment, reachability)
+    heating_status = _heating_status(row, time_to_peak=time_to_peak, raw_high=raw_high)
 
     enriched.update(
         {
@@ -49,6 +50,7 @@ def enrich_decision_layer(row: dict[str, Any]) -> dict[str, Any]:
             "reachability_label": reachability,
             "market_weather_alignment": alignment,
             "false_pump_warning": false_pump,
+            **heating_status,
             "decision_note": _decision_note(
                 row,
                 reachability=reachability,
@@ -61,6 +63,134 @@ def enrich_decision_layer(row: dict[str, Any]) -> dict[str, Any]:
         }
     )
     return enriched
+
+
+def _heating_status(row: dict[str, Any], *, time_to_peak: int | None, raw_high: float | None) -> dict[str, Any]:
+    score = 50
+    reasons: list[str] = []
+    heating_rate = _to_float(row.get("heating_rate_f_per_hour"))
+    current = _to_float(row.get("current_temp_f"))
+    forecast = _to_float(row.get("forecast_high_f"))
+
+    if heating_rate is not None:
+        if heating_rate >= 1.5:
+            score += 26
+            reasons.append(f"Recent NWS temps are rising about {heating_rate:.1f}F/hr.")
+        elif heating_rate >= 0.5:
+            score += 14
+            reasons.append(f"Recent NWS temps are still rising about {heating_rate:.1f}F/hr.")
+        elif heating_rate > -0.3:
+            score -= 6
+            reasons.append("Recent NWS temps are mostly flat.")
+        else:
+            score -= 28
+            reasons.append(f"Recent NWS temps are falling about {abs(heating_rate):.1f}F/hr.")
+
+    if current is not None and raw_high is not None:
+        if current >= raw_high - 0.3:
+            score += 9
+            reasons.append("Latest temp is near the high so far.")
+        elif raw_high - current >= 1.0:
+            score -= 18
+            reasons.append("Latest temp is below a hotter reading already recorded.")
+
+    if time_to_peak is not None:
+        if time_to_peak > 90:
+            score += 12
+            reasons.append("Forecast peak is still more than 90 minutes away.")
+        elif time_to_peak > 0:
+            score += 6
+            reasons.append("Forecast peak has not passed yet.")
+        elif time_to_peak >= -45:
+            score -= 10
+            reasons.append("Forecast peak window is passing.")
+        else:
+            score -= 24
+            reasons.append("Forecast peak is past peak.")
+
+    forecast_slope = _forecast_slope(row.get("forecast_hourly_temps_f"))
+    if forecast_slope is not None:
+        if forecast_slope > 0.5:
+            score += 12
+            reasons.append("NWS hourly forecast still slopes hotter.")
+        elif forecast_slope < -0.5:
+            score -= 14
+            reasons.append("NWS hourly forecast slopes cooler.")
+
+    if forecast is not None and raw_high is not None:
+        if forecast >= raw_high + 1.0:
+            score += 8
+            reasons.append("Forecast leaves room above the current high so far.")
+        elif forecast <= raw_high - 1.0:
+            score -= 8
+            reasons.append("Forecast no longer supports much above the current high.")
+
+    cloud_text = str(row.get("cloud_text") or "").lower()
+    cloud_cover_change = _to_float(row.get("cloud_cover_change"))
+    if any(word in cloud_text for word in ["clear", "sunny", "fair"]):
+        score += 8
+        reasons.append("Sky condition supports heating.")
+    elif any(word in cloud_text for word in ["cloud", "overcast", "rain", "thunder"]):
+        score -= 12
+        reasons.append("Cloud cover weakens heating.")
+    if cloud_cover_change is not None and cloud_cover_change > 15:
+        score -= 8
+        reasons.append("Cloud cover is increasing.")
+
+    humidity = _to_float(row.get("humidity"))
+    humidity_trend = _to_float(row.get("humidity_trend"))
+    if humidity is not None:
+        if humidity <= 18:
+            score += 8
+            reasons.append("Very dry air supports efficient heating.")
+        elif humidity >= 55:
+            score -= 8
+            reasons.append("Higher humidity weakens late-day heating.")
+    if humidity_trend is not None:
+        if humidity_trend <= -5:
+            score += 5
+            reasons.append("Humidity trend is drying.")
+        elif humidity_trend >= 5:
+            score -= 7
+            reasons.append("Humidity is rising.")
+
+    wind_speed = _to_float(row.get("wind_speed_mph"))
+    if wind_speed is not None:
+        if 8 <= wind_speed <= 22:
+            score += 7
+            reasons.append("Wind speed can support boundary-layer mixing.")
+        elif wind_speed < 3:
+            score -= 4
+            reasons.append("Light wind gives less mixing support.")
+
+    score = max(0, min(100, int(round(score))))
+    return {
+        "heating_status_score": score,
+        "heating_status_label": _heating_status_label(score),
+        "heating_status_reasons": reasons[:4],
+    }
+
+
+def _heating_status_label(score: int) -> str:
+    if score >= 80:
+        return "HEATING"
+    if score >= 60:
+        return "STILL POSSIBLE"
+    if score >= 40:
+        return "MIXED"
+    if score >= 25:
+        return "SLOWING"
+    return "LIKELY DONE"
+
+
+def _forecast_slope(values: Any) -> float | None:
+    if not isinstance(values, list) or len(values) < 2:
+        return None
+    numbers = [_to_float(value) for value in values[:4]]
+    numbers = [value for value in numbers if value is not None]
+    if len(numbers) < 2:
+        return None
+    return numbers[-1] - numbers[0]
 
 
 def _critical_window_et(peak: datetime | None) -> str:

@@ -14,6 +14,7 @@ from live_dashboard import (
     live_city_config,
     market_date_label,
     normalize_live_day,
+    parse_metar_max_temp_f,
     recent_observation_feed_summary,
     selected_live_city_configs,
 )
@@ -25,7 +26,7 @@ class LiveDashboardServiceTests(unittest.TestCase):
 
         self.assertEqual(cities, ["Phoenix", "Las Vegas", "San Antonio"])
 
-    def test_selected_live_city_configs_can_return_tomorrow_market_date(self):
+    def test_selected_live_city_configs_ignores_tomorrow_and_returns_today_cities(self):
         configs = selected_live_city_configs("tomorrow")
         cities = [config["city"] for config in configs]
 
@@ -49,8 +50,8 @@ class LiveDashboardServiceTests(unittest.TestCase):
     def test_market_date_label_collapses_single_date(self):
         self.assertEqual(market_date_label([{"market_date": "2026-06-04"}]), "2026-06-04")
 
-    def test_normalize_live_day_only_allows_today_or_tomorrow(self):
-        self.assertEqual(normalize_live_day("tomorrow"), "tomorrow")
+    def test_normalize_live_day_forces_today_only(self):
+        self.assertEqual(normalize_live_day("tomorrow"), "today")
         self.assertEqual(normalize_live_day("weird"), "today")
 
     def test_favorite_buckets_returns_winner_and_second_by_yes_price(self):
@@ -101,6 +102,7 @@ class LiveDashboardServiceTests(unittest.TestCase):
             "fast_metar_raw": "KPHX 031801Z AUTO 00000KT 10SM CLR 38/02 A2992",
             "fast_feed_source": "AviationWeather METAR",
             "raw_high_so_far_f": 100.4,
+            "raw_high_so_far_time": "2026-06-03T18:00:00+00:00",
             "high_so_far_f": 100.0,
             "heating_rate_f_per_hour": 2.0,
             "forecast_high_f": 106.0,
@@ -138,11 +140,29 @@ class LiveDashboardServiceTests(unittest.TestCase):
         self.assertEqual(payload["fast_metar_time"], "2026-06-03T18:01:00.000Z")
         self.assertEqual(payload["fast_feed_source"], "AviationWeather METAR")
         self.assertEqual(payload["recent_observation_max_f"], 100.4)
+        self.assertEqual(payload["raw_high_so_far_time"], "2026-06-03T18:00:00+00:00")
         self.assertEqual(payload["latest_history_time"], "2026-06-03T18:00:00+00:00")
         self.assertTrue(payload["latest_feed_lag_warning"])
+        self.assertIn("heating_status_score", payload)
+        self.assertIn("heating_status_label", payload)
+        self.assertIsInstance(payload["heating_status_reasons"], list)
+        self.assertEqual(payload["station_truth_label"], "Official station KPHX")
+        self.assertEqual(payload["rounding_risk_label"], "Next bucket danger")
+        self.assertEqual(payload["six_hour_lock_label"], "No 6h max yet")
+        self.assertEqual(payload["market_confirmation_label"], "Market hotter than weather")
         self.assertEqual(payload["reachability_label"], "UNLIKELY")
         self.assertTrue(payload["false_pump_warning"])
         self.assertEqual(payload["warnings"], ["weather warning", "market warning"])
+
+    def test_parse_metar_max_temp_f_reads_six_hour_max_group(self):
+        raw = "KLAS 042256Z 21010G15KT 10SM CLR 40/M06 A2975 RMK AO2 10411 T04001061"
+
+        self.assertAlmostEqual(parse_metar_max_temp_f(raw), 106.0, places=1)
+
+    def test_parse_metar_max_temp_f_reads_24_hour_group_when_six_hour_missing(self):
+        raw = "KLAS 050456Z 21010KT 10SM CLR 35/M04 A2978 RMK AO2 404110283"
+
+        self.assertAlmostEqual(parse_metar_max_temp_f(raw), 106.0, places=1)
 
     def test_recent_observation_feed_summary_flags_newer_history(self):
         weather = {
@@ -221,15 +241,15 @@ class LiveDashboardServiceTests(unittest.TestCase):
         self.assertEqual(calls["count"], 1)
 
         tomorrow = cache.get("tomorrow")
-        self.assertEqual(tomorrow["active_day"], "tomorrow")
-        self.assertEqual(tomorrow["generated"], 2)
+        self.assertEqual(tomorrow["active_day"], "today")
+        self.assertEqual(tomorrow["generated"], 1)
 
         later = now + timedelta(seconds=61)
         cache.clock = lambda: later
         third = cache.get("today")
 
-        self.assertEqual(third["generated"], 3)
-        self.assertEqual(calls["count"], 3)
+        self.assertEqual(third["generated"], 2)
+        self.assertEqual(calls["count"], 2)
 
     def test_temp_meter_cache_uses_three_second_city_cache(self):
         calls = {"count": 0}
@@ -271,11 +291,11 @@ class LiveDashboardAppTests(unittest.TestCase):
         self.assertEqual(response.json()["cities"], [])
         self.assertEqual(response.json()["active_day"], "today")
 
-    def test_api_live_accepts_tomorrow_tab(self):
+    def test_api_live_tomorrow_param_returns_today_payload(self):
         import live_app
 
         live_app.live_cache.values = {
-            "tomorrow": {"cities": [], "active_day": "tomorrow", "market_date_label": "2026-06-04"}
+            "today": {"cities": [], "active_day": "today", "market_date_label": "2026-06-04"}
         }
         live_app.live_cache.fetched_at = {}
         client = TestClient(live_app.app)
@@ -283,7 +303,7 @@ class LiveDashboardAppTests(unittest.TestCase):
         response = client.get("/api/live?day=tomorrow")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["active_day"], "tomorrow")
+        self.assertEqual(response.json()["active_day"], "today")
 
     def test_api_live_includes_public_polling_metadata(self):
         import live_app
@@ -329,7 +349,22 @@ class LiveDashboardAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["city"], "Phoenix")
         self.assertEqual(response.json()["fast_metar_temp_f"], 101.0)
-        self.assertEqual(response.json()["cache_ttl_seconds"], 3)
+        self.assertEqual(response.json()["cache_ttl_seconds"], 10)
+
+    def test_history_api_returns_three_day_payload(self):
+        import live_app
+
+        client = TestClient(live_app.app)
+        with patch(
+            "live_app.load_historical_payload",
+            return_value={"city": "Las Vegas", "days": [{"market_date": "2026-06-03"}]},
+        ) as loader:
+            response = client.get("/api/history?city=Las%20Vegas")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["city"], "Las Vegas")
+        self.assertEqual(len(response.json()["days"]), 1)
+        loader.assert_called_once_with("Las Vegas", days=3)
 
     def test_dashboard_script_auto_refreshes_when_countdown_expires(self):
         import live_app
@@ -340,33 +375,47 @@ class LiveDashboardAppTests(unittest.TestCase):
         self.assertIn("seconds <= 0 && !refreshInFlight", html)
         self.assertIn("load();", html)
 
-    def test_dashboard_has_final_minutes_mode(self):
+    def test_dashboard_has_main_page_live_temp_graph(self):
         import live_app
 
         html = live_app._dashboard_html()
 
         self.assertIn("dateBanner", html)
         self.assertIn("Today", html)
-        self.assertIn("Tomorrow", html)
-        self.assertIn("Tomorrow tab uses NWS forecast", html)
         self.assertIn("forecastOnly", html)
-        self.assertIn("/api/live?day=", html)
-        self.assertIn("Open Live Temp Meter", html)
-        self.assertIn("Live Temp Meter", html)
-        self.assertIn("Fast METAR Feed", html)
-        self.assertIn("AviationWeather METAR", html)
+        self.assertIn("fetch('/api/live'", html)
+        self.assertIn("NWS live temperature graph", html)
+        self.assertIn("tempGraph", html)
+        self.assertIn("High so far", html)
+        self.assertIn("tempGraphHighPath", html)
+        self.assertIn("NWS points often post around 5 min", html)
+        self.assertIn("Still heating?", html)
+        self.assertIn("heating_status_score", html)
+        self.assertIn("heating_status_label", html)
+        self.assertIn("marketChecklist", html)
+        self.assertIn("6h clue", html)
+        self.assertIn("Rounding", html)
+        self.assertIn("Market check", html)
+        self.assertIn("High So Far Raw", html)
+        self.assertIn("High Time ET", html)
+        self.assertIn("dayHigh", html)
         self.assertIn("fast_metar_temp_f", html)
-        self.assertIn("fast_metar_time", html)
         self.assertIn("tempMeterPollSeconds", html)
         self.assertIn("syncPollTimers", html)
         self.assertIn("/api/temp-meter?city=", html)
-        self.assertIn("Latest Endpoint", html)
-        self.assertIn("Recent Max", html)
+        self.assertIn("refreshVisibleTempMeters", html)
+        self.assertIn("updateLiveTempGraph", html)
+        self.assertIn("/api/history?city=", html)
+        self.assertIn("historic", html.lower())
         self.assertIn("Recent NWS station feed", html)
         self.assertIn("latest_feed_lag_warning", html)
-        self.assertIn("Next Round Risk", html)
-        self.assertIn("Data Refresh", html)
-        self.assertIn("openFinalCities", html)
+        self.assertNotIn("Open Live Temp Meter", html)
+        self.assertNotIn("openFinalCities", html)
+        self.assertNotIn("Degrees Needed", html)
+        self.assertNotIn("Needed Rate", html)
+        self.assertNotIn("Market vs Weather", html)
+        self.assertNotIn("Tomorrow", html)
+        self.assertNotIn("tabButton", html)
 
     def test_health_route_is_public(self):
         import live_app

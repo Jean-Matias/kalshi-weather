@@ -162,7 +162,7 @@ def fetch_nws_observation_history(city_config: dict[str, Any]) -> dict[str, Any]
     )
     data = _get_json(url)
     features = data.get("features", [])
-    temps: list[float] = []
+    temp_records: list[tuple[float, str | None]] = []
     humidities: list[float] = []
     pressures: list[float] = []
     wind_dirs: list[float] = []
@@ -177,7 +177,7 @@ def fetch_nws_observation_history(city_config: dict[str, Any]) -> dict[str, Any]
             observation_times.append(timestamp)
         temp = _c_to_f(_value(props, "temperature"))
         if temp is not None:
-            temps.append(temp)
+            temp_records.append((temp, timestamp))
             if timestamp:
                 temp_points.append((timestamp, temp))
         humidity = _value(props, "relativeHumidity")
@@ -193,15 +193,18 @@ def fetch_nws_observation_history(city_config: dict[str, Any]) -> dict[str, Any]
         if wind_speed is not None:
             wind_speeds.append(wind_speed)
 
-    raw_high_so_far = max(temps) if temps else None
+    raw_high_record = max(temp_records, key=lambda item: item[0]) if temp_records else None
+    raw_high_so_far = raw_high_record[0] if raw_high_record else None
+    raw_high_so_far_time = raw_high_record[1] if raw_high_record else None
     recent_points = _recent_temp_points(temp_points)
     return {
         "raw_high_so_far_f": raw_high_so_far,
+        "raw_high_so_far_time": raw_high_so_far_time,
         "high_so_far_f": _round_official_temp(raw_high_so_far),
         "latest_observation_time": _latest_time_text(observation_times),
         "recent_observation_points": recent_points,
         "heating_rate_f_per_hour": _heating_rate_f_per_hour(recent_points),
-        "station_temp_stdev_f": statistics.pstdev(temps) if len(temps) > 1 else None,
+        "station_temp_stdev_f": statistics.pstdev([record[0] for record in temp_records]) if len(temp_records) > 1 else None,
         "humidity_trend": _trend(humidities),
         "pressure_trend": _trend(pressures),
         "wind_shift": _wind_shift(wind_dirs),

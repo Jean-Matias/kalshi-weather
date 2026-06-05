@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from history_data import load_historical_payload
 from live_dashboard import LiveDashboardCache, LiveTempMeterCache
 
 app = FastAPI(title="Kalshi Weather Live Dashboard")
@@ -28,6 +29,11 @@ def api_live(day: str = "today") -> JSONResponse:
 @app.get("/api/temp-meter")
 def api_temp_meter(city: str) -> JSONResponse:
     return JSONResponse(temp_meter_cache.get(city))
+
+
+@app.get("/api/history")
+def api_history(city: str = "Las Vegas") -> JSONResponse:
+    return JSONResponse(load_historical_payload(city, days=3))
 
 
 def _dashboard_html() -> str:
@@ -69,14 +75,28 @@ def _dashboard_html() -> str:
         <span>Analyzing</span>
         <strong id="bannerDate">Loading market date</strong>
       </div>
-      <p id="bannerNote">Today uses live station observations. Tomorrow is forecast and market-board only.</p>
+      <p id="bannerNote">Today uses live NWS station observations, recent high-so-far, forecast, and Kalshi market board.</p>
     </section>
-    <nav class="tabs" aria-label="Market day tabs">
-      <button class="tabButton active" type="button" data-day="today">Today</button>
-      <button class="tabButton" type="button" data-day="tomorrow">Tomorrow</button>
-    </nav>
     <section id="summary" class="summary"></section>
     <section id="cards" class="cards"></section>
+    <section class="historyPanel">
+      <div class="historyHead">
+        <div>
+          <span>Historic Data</span>
+          <strong>3-day market history</strong>
+          <p>Saved snapshots only. This section is meant for pattern-reading, not live refresh.</p>
+        </div>
+        <label>
+          City
+          <select id="historyCity">
+            <option>Las Vegas</option>
+            <option>Phoenix</option>
+            <option>San Antonio</option>
+          </select>
+        </label>
+      </div>
+      <div id="historyCharts" class="historyCharts"></div>
+    </section>
   </main>
   <script>{_javascript()}</script>
 </body>
@@ -164,20 +184,6 @@ p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
 .badge { border-radius: 999px; padding: 6px 10px; font-size: 12px; font-weight: 800; background: var(--warn-bg); color: var(--warn); white-space: nowrap; }
 .good .badge { background: var(--good-bg); color: var(--good); }
 .bad .badge { background: var(--bad-bg); color: var(--bad); }
-.finalToggle {
-  background: linear-gradient(135deg, rgba(69, 200, 216, 0.18), rgba(86, 212, 148, 0.12));
-  border: 1px solid rgba(69, 200, 216, 0.42);
-  border-radius: 999px;
-  color: var(--ink);
-  cursor: pointer;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 900;
-  min-height: 38px;
-  padding: 9px 12px;
-  white-space: nowrap;
-}
-.finalToggle:hover { border-color: var(--accent); }
 .forecastOnly {
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -187,50 +193,6 @@ p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
   padding: 8px 10px;
   white-space: nowrap;
 }
-.finalPanel {
-  background: rgba(69, 200, 216, 0.07);
-  border: 1px solid rgba(69, 200, 216, 0.30);
-  border-radius: 8px;
-  display: none;
-  margin-top: 14px;
-  padding: 12px;
-}
-.card.final-open .finalPanel { display: block; }
-.liveMeter {
-  background: linear-gradient(135deg, rgba(69, 200, 216, 0.16), rgba(86, 212, 148, 0.08));
-  border: 1px solid rgba(69, 200, 216, 0.36);
-  border-radius: 8px;
-  margin-bottom: 10px;
-  padding: 12px;
-}
-.liveMeterHead {
-  align-items: flex-start;
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-.liveMeterTitle { color: var(--ink); font-size: 13px; font-weight: 900; text-transform: uppercase; }
-.liveMeterSub { color: var(--muted); font-size: 12px; margin-top: 2px; }
-.liveMeterPill {
-  background: rgba(86, 212, 148, 0.14);
-  border: 1px solid rgba(86, 212, 148, 0.35);
-  border-radius: 999px;
-  color: var(--good);
-  font-size: 11px;
-  font-weight: 900;
-  padding: 5px 8px;
-  white-space: nowrap;
-}
-.liveMeterGrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-.liveMeterItem { background: rgba(8, 13, 18, 0.62); border: 1px solid var(--line); border-radius: 6px; padding: 9px; }
-.liveMeterItem span { color: var(--muted); display: block; font-size: 10px; font-weight: 800; margin-bottom: 5px; text-transform: uppercase; }
-.liveMeterItem strong { display: block; font-size: 18px; overflow-wrap: anywhere; }
-.liveMeterItem.primary strong { color: var(--good); font-size: 24px; line-height: 1; }
-.finalGrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-.finalItem { background: #0c141b; border: 1px solid var(--line); border-radius: 6px; padding: 9px; }
-.finalItem span { color: var(--muted); display: block; font-size: 10px; font-weight: 800; margin-bottom: 5px; text-transform: uppercase; }
-.finalItem strong { display: block; font-size: 15px; overflow-wrap: anywhere; }
 .feedWarning {
   background: var(--warn-bg);
   border: 1px solid rgba(243, 183, 75, 0.38);
@@ -277,19 +239,77 @@ p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
 .barTrack { background: #1d2a34; border-radius: 999px; height: 10px; overflow: hidden; }
 .barFill { background: linear-gradient(90deg, #2ca8b8, var(--accent)); border-radius: inherit; height: 100%; width: 0; }
 .bucketRow.second .barFill { background: linear-gradient(90deg, #9d7a27, var(--gold)); }
-.tempRail { margin-top: 8px; }
-.tempLabels { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; font-weight: 700; margin-bottom: 6px; }
-.tempTrack { background: #1d2a34; border-radius: 999px; height: 14px; overflow: hidden; position: relative; }
-.tempFill { background: linear-gradient(90deg, #45c8d8, #d49228); border-radius: inherit; height: 100%; width: 0; }
-.tempMarker {
-  background: #f4fbf7;
-  border: 2px solid var(--panel);
+.heatingSignal {
+  background: rgba(8, 13, 18, 0.62);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-top: 12px;
+  padding: 12px;
+}
+.heatingSignalTop { align-items: center; display: flex; justify-content: space-between; gap: 10px; }
+.heatingSignalTop span { color: var(--muted); display: block; font-size: 11px; font-weight: 850; text-transform: uppercase; }
+.heatingSignalTop strong { display: block; font-size: 20px; margin-top: 2px; }
+.heatingScore { color: var(--good); font-size: 24px; font-weight: 950; white-space: nowrap; }
+.heatingSignal.slow .heatingScore { color: var(--bad); }
+.heatingSignal.mixed .heatingScore { color: var(--warn); }
+.heatingScoreTrack { background: #1d2a34; border-radius: 999px; height: 8px; margin-top: 10px; overflow: hidden; }
+.heatingScoreFill { background: linear-gradient(90deg, var(--bad), var(--warn), var(--good)); border-radius: inherit; height: 100%; }
+.heatingReasons { color: var(--muted); font-size: 12px; font-weight: 760; line-height: 1.45; margin-top: 9px; }
+.marketChecklist {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, 1fr);
+  margin-top: 10px;
+}
+.checkItem {
+  background: rgba(8, 13, 18, 0.62);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  min-width: 0;
+  padding: 9px;
+}
+.checkItem.warn { border-color: rgba(243, 183, 75, 0.45); }
+.checkItem.bad { border-color: rgba(255, 107, 94, 0.42); }
+.checkItem span { color: var(--muted); display: block; font-size: 10px; font-weight: 850; margin-bottom: 4px; text-transform: uppercase; }
+.checkItem strong { display: block; font-size: 13px; overflow-wrap: anywhere; }
+.checkItem small { color: var(--muted); display: block; font-size: 11px; font-weight: 720; line-height: 1.35; margin-top: 4px; }
+.tempGraphHead { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.tempGraphHead strong { display: block; font-size: 26px; line-height: 1; }
+.tempGraphHead span { color: var(--muted); display: block; font-size: 11px; font-weight: 800; margin-top: 4px; text-transform: uppercase; }
+.tempGraphMeta { color: var(--muted); font-size: 12px; font-weight: 800; text-align: right; }
+.tempGraph {
+  background:
+    linear-gradient(rgba(255,255,255,0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px),
+    #081017;
+  background-size: 100% 32px, 56px 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  height: 174px;
+  overflow: hidden;
+  position: relative;
+}
+.tempGraph svg { display: block; height: 100%; width: 100%; }
+.tempGraphPath { fill: none; stroke: var(--accent); stroke-linecap: round; stroke-linejoin: round; stroke-width: 3; }
+.tempGraphHighPath { fill: none; stroke: var(--gold); stroke-linecap: round; stroke-linejoin: round; stroke-width: 3; }
+.tempGraphArea { fill: rgba(69, 200, 216, 0.12); }
+.tempGraphPoint { fill: var(--good); stroke: #081017; stroke-width: 2; }
+.tempGraphHighPoint { fill: var(--gold); stroke: #081017; stroke-width: 2; }
+.tempGraphEmpty { align-items: center; color: var(--muted); display: flex; font-size: 13px; font-weight: 800; inset: 0; justify-content: center; position: absolute; }
+.tempLegend { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.legendItem { align-items: center; color: var(--muted); display: inline-flex; font-size: 12px; font-weight: 850; gap: 6px; }
+.legendSwatch { border-radius: 999px; display: inline-block; height: 3px; width: 22px; }
+.legendSwatch.current { background: var(--accent); }
+.legendSwatch.high { background: var(--gold); }
+.tempGraphFooter { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 9px; }
+.tempChip {
+  background: #0c141b;
+  border: 1px solid var(--line);
   border-radius: 999px;
-  height: 18px;
-  position: absolute;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  width: 18px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 850;
+  padding: 6px 8px;
 }
 .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 14px; }
 .metric { background: #0c141b; border: 1px solid var(--line); border-radius: 6px; min-width: 0; padding: 10px; }
@@ -351,23 +371,107 @@ p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
 .dateBanner span { color: var(--muted); display: block; font-size: 11px; font-weight: 800; text-transform: uppercase; }
 .dateBanner strong { color: var(--ink); display: block; font-size: 20px; margin-top: 2px; }
 .dateBanner p { color: var(--muted); font-size: 13px; margin: 0; max-width: 560px; text-align: right; }
-.tabs { display: flex; gap: 8px; margin-bottom: 14px; }
-.tabButton {
+.historyPanel {
   background: rgba(16, 24, 32, 0.78);
   border: 1px solid var(--line);
   border-radius: 8px;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.22);
+  margin-top: 18px;
+  padding: 15px;
+}
+.historyHead {
+  align-items: flex-start;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+}
+.historyHead span {
+  color: var(--accent);
+  display: block;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+.historyHead strong { display: block; font-size: 21px; margin-top: 3px; }
+.historyHead p { font-size: 13px; margin-top: 4px; }
+.historyHead label {
   color: var(--muted);
-  cursor: pointer;
+  display: grid;
+  font-size: 11px;
+  font-weight: 900;
+  gap: 6px;
+  min-width: 180px;
+  text-transform: uppercase;
+}
+.historyHead select {
+  appearance: none;
+  background: #0c141b;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--ink);
   font: inherit;
   font-size: 14px;
-  font-weight: 900;
-  min-height: 42px;
-  padding: 9px 16px;
+  font-weight: 850;
+  padding: 10px 11px;
 }
-.tabButton.active {
-  background: rgba(69, 200, 216, 0.16);
-  border-color: var(--accent);
-  color: var(--ink);
+.historyCharts { display: grid; gap: 12px; margin-top: 13px; }
+.historyCard {
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+}
+.historyCardHead {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.historyCardHead strong { display: block; font-size: 18px; }
+.historyCardHead span { color: var(--muted); display: block; font-size: 12px; font-weight: 800; margin-top: 3px; }
+.historyLegend { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.historyLegend .legendItem { font-size: 11px; }
+.legendSwatch.kalshi { background: var(--gold); }
+.legendSwatch.actual { background: var(--good); }
+.legendSwatch.forecast { background: #dbe8ef; }
+.legendSwatch.bucket { background: var(--accent); opacity: 0.7; }
+.historyChart {
+  background:
+    linear-gradient(rgba(255,255,255,0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px),
+    #081017;
+  background-size: 100% 36px, 64px 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  height: 258px;
+  overflow: hidden;
+}
+.historyChart svg { display: block; height: 100%; width: 100%; }
+.histAxis { stroke: rgba(238, 247, 243, 0.18); stroke-width: 1; }
+.histLabel { fill: var(--muted); font-size: 10px; font-weight: 800; }
+.histLine { fill: none; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2.8; }
+.histKalshi { stroke: var(--gold); }
+.histActual { stroke: var(--good); }
+.histForecast { stroke: #dbe8ef; stroke-dasharray: 6 5; }
+.histBucket { fill: none; stroke-width: 1.5; opacity: 0.62; }
+.histPoint { stroke: #081017; stroke-width: 2; }
+.histPoint.kalshi { fill: var(--gold); }
+.histPoint.actual { fill: var(--good); }
+.histPoint.forecast { fill: #dbe8ef; }
+.histPoint.bucket { stroke-width: 1; opacity: 0.88; }
+.historyEmpty {
+  align-items: center;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  display: flex;
+  font-size: 13px;
+  font-weight: 850;
+  justify-content: center;
+  min-height: 118px;
+  padding: 18px;
+  text-align: center;
 }
 @media (max-width: 850px) {
   .topbar { display: block; }
@@ -375,20 +479,19 @@ p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
   .summary { grid-template-columns: 1fr; }
   .visualGrid { grid-template-columns: 1fr; }
   .metrics { grid-template-columns: repeat(2, 1fr); }
-  .liveMeterGrid { grid-template-columns: repeat(2, 1fr); }
-  .finalGrid { grid-template-columns: repeat(2, 1fr); }
+  .marketChecklist { grid-template-columns: 1fr; }
   .dateBanner { align-items: flex-start; flex-direction: column; }
   .dateBanner p { text-align: left; }
   .supportTop { align-items: flex-start; flex-direction: column; }
+  .historyHead { flex-direction: column; }
+  .historyHead label { width: 100%; }
+  .historyLegend { justify-content: flex-start; }
 }
 @media (max-width: 560px) {
   .shell { padding: 14px; }
   .metrics { grid-template-columns: 1fr; }
   .card-head { display: block; }
   .cardActions { align-items: flex-start; margin-top: 10px; }
-  .finalToggle { border-radius: 8px; width: 100%; }
-  .liveMeterGrid { grid-template-columns: 1fr; }
-  .finalGrid { grid-template-columns: 1fr; }
 }
 """
 
@@ -401,15 +504,15 @@ const statusText = document.getElementById('statusText');
 const updatedText = document.getElementById('updatedText');
 const bannerDate = document.getElementById('bannerDate');
 const bannerNote = document.getElementById('bannerNote');
-const tabButtons = document.querySelectorAll('.tabButton');
+const historyCity = document.getElementById('historyCity');
+const historyCharts = document.getElementById('historyCharts');
 let nextRefreshAt = null;
 let refreshInFlight = false;
-let activeDay = 'today';
+let historyInFlight = false;
 let mainPollSeconds = 15;
 let tempMeterPollSeconds = 3;
 let mainPollTimer = null;
 let tempMeterPollTimer = null;
-const openFinalCities = new Set();
 const tempMeterInFlight = new Set();
 const tempMeterNextPullAt = new Map();
 
@@ -476,7 +579,7 @@ function recentFeedMax(city) {
 
 function tempMeterCountdown(cityName) {
   const nextPull = tempMeterNextPullAt.get(cityName);
-  if (!nextPull) return 'starts when opened';
+  if (!nextPull) return 'waiting';
   const seconds = Math.max(0, Math.ceil((nextPull - Date.now()) / 1000));
   return seconds > 0 ? `${seconds}s` : 'due now';
 }
@@ -545,7 +648,6 @@ function tone(city) {
 function render(payload) {
   const updated = payload.last_updated || payload.generated_at || 'unknown';
   nextRefreshAt = payload.next_refresh_eta ? new Date(payload.next_refresh_eta) : null;
-  activeDay = payload.active_day || activeDay;
   mainPollSeconds = Number(payload.browser_poll_seconds || mainPollSeconds || 15);
   tempMeterPollSeconds = Number(payload.temp_meter_browser_poll_seconds || tempMeterPollSeconds || 3);
   syncPollTimers();
@@ -554,7 +656,7 @@ function render(payload) {
   updateCountdown();
   renderSummary(payload);
   cards.innerHTML = (payload.cities || []).map(city => `
-    <article class="card ${tone(city)} ${openFinalCities.has(city.city) ? 'final-open' : ''}">
+    <article class="card ${tone(city)}" data-live-card="${escapeAttribute(city.city)}">
       <div class="card-main">
         <div class="card-head">
           <div>
@@ -563,10 +665,9 @@ function render(payload) {
           </div>
           <div class="cardActions">
             <span class="badge">${escapeHtml(city.reachability_label || 'n/a')}</span>
-            ${activeDay === 'today' ? `<button class="finalToggle" type="button" data-final-city="${escapeAttribute(city.city)}">${openFinalCities.has(city.city) ? 'Hide Live Temp Meter' : 'Open Live Temp Meter'}</button>` : '<span class="forecastOnly">Forecast-only</span>'}
+            <span class="forecastOnly">${tempMeterPollSeconds}s live NWS graph</span>
           </div>
         </div>
-        ${finalMinutesPanel(city)}
         <div class="visualGrid">
           <div class="marketPanel">
             <div class="panelTitle">Kalshi board</div>
@@ -574,26 +675,18 @@ function render(payload) {
             ${bucketVisual('Second', city.second_bucket, 'second')}
           </div>
           <div class="tempPanel">
-            <div class="panelTitle">Official station temperature</div>
-            <div class="tempLabels">
-              <span>Current ${fmtTemp(city.current_temp_f)}</span>
-              <span>Forecast ${fmtTemp(city.forecast_high_f)}</span>
-            </div>
-            <div class="tempTrack">
-              <div class="tempFill" style="width:${tempPercent(city, city.current_temp_f).toFixed(1)}%"></div>
-              <div class="tempMarker" title="Raw high so far" style="left:${tempPercent(city, city.raw_high_so_far_f).toFixed(1)}%"></div>
-            </div>
+            ${liveTempGraph(city)}
+            ${heatingSignal(city)}
+            ${marketChecklist(city)}
           </div>
         </div>
         <div class="metrics">
-          <div class="metric"><span>High So Far</span><strong>${fmtTemp(city.high_so_far_f)}</strong></div>
-          <div class="metric"><span>Raw High</span><strong>${fmtTemp(city.raw_high_so_far_f)}</strong></div>
           <div class="metric"><span>Critical Hour</span><strong>${escapeHtml(city.critical_window_et || 'n/a')}</strong></div>
+          <div class="metric"><span>High So Far Raw</span><strong data-live-field="rawHigh" data-live-city="${escapeAttribute(city.city)}">${fmtTemp(city.raw_high_so_far_f)}</strong></div>
+          <div class="metric"><span>High Time ET</span><strong data-live-field="rawHighTime" data-live-city="${escapeAttribute(city.city)}">${escapeHtml(fmtEtTime(city.raw_high_so_far_time))}</strong></div>
+          <div class="metric"><span>Rounded If Final</span><strong data-live-field="rounded" data-live-city="${escapeAttribute(city.city)}">${escapeHtml(roundedOutcome(city))}</strong></div>
           <div class="metric"><span>Peak Countdown</span><strong class="peakCountdown" data-peak-time="${escapeAttribute(city.forecast_high_time || '')}">${escapeHtml(peakCountdown(city))}</strong></div>
-          <div class="metric"><span>Market vs Weather</span><strong>${escapeHtml(city.market_weather_alignment || 'n/a')}</strong></div>
           <div class="metric"><span>Heating Pace</span><strong>${fmtRate(city.heating_rate_f_per_hour)}</strong></div>
-          <div class="metric"><span>Needed Rate</span><strong>${fmtRate(city.required_rate_f_per_hour)}</strong></div>
-          <div class="metric"><span>Degrees Needed</span><strong>${fmtTemp(city.degrees_needed_to_reach_bucket)}</strong></div>
         </div>
         ${sourceLinks(city)}
         ${(city.warnings || []).length ? `<p class="warnings">${escapeHtml(city.warnings[0])}</p>` : ''}
@@ -601,70 +694,144 @@ function render(payload) {
       <p class="note">${escapeHtml(city.decision_note || '')}</p>
     </article>
   `).join('');
+  refreshVisibleTempMeters();
 }
 
 function renderBanner(payload) {
-  const dayLabel = payload.active_day === 'tomorrow' ? 'Tomorrow' : 'Today';
-  bannerDate.textContent = `${dayLabel} market: ${payload.market_date_label || 'unknown'}`;
-  bannerNote.textContent = payload.active_day === 'tomorrow'
-    ? 'Tomorrow tab uses NWS forecast plus Kalshi market board. Live station high resets when that date starts.'
-    : 'Today tab uses live NWS station observations, recent high-so-far, forecast, and Kalshi market board.';
-  tabButtons.forEach(button => {
-    button.classList.toggle('active', button.dataset.day === payload.active_day);
-  });
+  bannerDate.textContent = `Today market: ${payload.market_date_label || 'unknown'}`;
+  bannerNote.textContent = 'Today uses live NWS station observations, recent high-so-far, forecast, and Kalshi market board.';
 }
 
-function finalMinutesPanel(city) {
-  if (activeDay !== 'today') {
-    return '';
-  }
+function liveTempGraph(city) {
+  const points = normalizedTempPoints(city);
+  const current = city.latest_endpoint_temp_f ?? city.current_temp_f;
+  const recentMax = city.recent_observation_max_f ?? city.raw_high_so_far_f;
   return `
-    <div class="finalPanel" data-final-panel="${escapeAttribute(city.city)}">
-      ${liveTempMeter(city)}
-      <div class="finalGrid">
-        <div class="finalItem"><span>Latest Endpoint</span><strong>${fmtTemp(city.latest_endpoint_temp_f ?? city.current_temp_f)}</strong></div>
-        <div class="finalItem"><span>Fast METAR Feed</span><strong>${fmtTemp(city.fast_metar_temp_f)}</strong></div>
-        <div class="finalItem"><span>Recent Max</span><strong>${recentFeedMax(city)}</strong></div>
-        <div class="finalItem"><span>If Final Now</span><strong>${escapeHtml(roundedOutcome(city))}</strong></div>
-        <div class="finalItem"><span>Next Round Risk</span><strong>${escapeHtml(nextRoundDistance(city))}</strong></div>
-        <div class="finalItem"><span>Latest Endpoint Time</span><strong>${escapeHtml(fmtEtTime(city.latest_endpoint_time))}</strong></div>
-        <div class="finalItem"><span>Fast Feed Time</span><strong>${escapeHtml(fmtEtTime(city.fast_metar_time))}</strong></div>
-        <div class="finalItem"><span>Recent Feed Time</span><strong>${escapeHtml(fmtEtTime(city.latest_history_time || city.latest_observation_time))}</strong></div>
-        <div class="finalItem"><span>Last Obs Age</span><strong class="obsAge" data-obs-time="${escapeAttribute(city.latest_history_time || city.latest_observation_time || '')}">${escapeHtml(lastObsAge({latest_observation_time: city.latest_history_time || city.latest_observation_time}))}</strong></div>
-        <div class="finalItem"><span>Peak Status</span><strong class="peakStatus" data-peak-time="${escapeAttribute(city.forecast_high_time || '')}">${escapeHtml(peakStatus(city))}</strong></div>
-        <div class="finalItem"><span>Data Refresh</span><strong class="finalRefreshCountdown">${escapeHtml(refreshCountdownText())}</strong></div>
+    <div class="panelTitle">NWS live temperature graph</div>
+    <div class="tempGraphHead">
+      <div>
+        <strong data-live-field="current" data-live-city="${escapeAttribute(city.city)}">${fmtTemp(current)}</strong>
+        <span>Latest NWS temp</span>
       </div>
-      ${city.latest_feed_lag_warning ? `<div class="feedWarning">${escapeHtml(city.latest_feed_lag_note || 'Latest endpoint may be behind the recent observation list.')}</div>` : ''}
-      ${recentObservationRows(city)}
+      <div class="tempGraphMeta">
+        <div data-live-field="refresh" data-live-city="${escapeAttribute(city.city)}">${escapeHtml(tempMeterCountdown(city.city))}</div>
+        <div data-live-field="time" data-live-city="${escapeAttribute(city.city)}">${escapeHtml(fmtEtTime(city.latest_history_time || city.latest_endpoint_time || city.latest_observation_time))}</div>
+      </div>
+    </div>
+    <div class="tempLegend">
+      <span class="legendItem"><span class="legendSwatch current"></span>Latest temp</span>
+      <span class="legendItem"><span class="legendSwatch high"></span>High so far</span>
+    </div>
+    <div class="tempGraph" data-live-field="graph" data-live-city="${escapeAttribute(city.city)}">${tempGraphSvg(points, city.raw_high_so_far_f)}</div>
+    <div class="tempGraphFooter" data-live-field="chips" data-live-city="${escapeAttribute(city.city)}">
+      <span class="tempChip">Day high: ${fmtTemp(city.raw_high_so_far_f)}${city.raw_high_so_far_time ? ` at ${escapeHtml(fmtEtTime(city.raw_high_so_far_time))}` : ''}</span>
+      <span class="tempChip">Recent high: ${fmtTemp(recentMax)}</span>
+      <span class="tempChip">Fast METAR: ${fmtTemp(city.fast_metar_temp_f)}</span>
+      <span class="tempChip">Forecast: ${fmtTemp(city.forecast_high_f)}</span>
+      <span class="tempChip">Checks every ${tempMeterPollSeconds}s; NWS points often post around 5 min</span>
+    </div>
+    ${city.latest_feed_lag_warning ? `<div class="feedWarning" data-live-field="warning" data-live-city="${escapeAttribute(city.city)}">${escapeHtml(city.latest_feed_lag_note || '')}</div>` : `<div data-live-field="warning" data-live-city="${escapeAttribute(city.city)}"></div>`}
+    ${recentObservationRows(city)}
+  `;
+}
+
+function heatingSignal(city) {
+  const score = Number(city.heating_status_score);
+  const safeScore = Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : 0;
+  const label = city.heating_status_label || 'n/a';
+  const toneClass = safeScore >= 60 ? 'hot' : safeScore >= 40 ? 'mixed' : 'slow';
+  const reasons = (city.heating_status_reasons || []).slice(0, 3);
+  return `
+    <div class="heatingSignal ${toneClass}">
+      <div class="heatingSignalTop">
+        <div>
+          <span>Still heating?</span>
+          <strong>${escapeHtml(label)}</strong>
+        </div>
+        <div class="heatingScore">${Number.isFinite(score) ? `${safeScore}/100` : 'n/a'}</div>
+      </div>
+      <div class="heatingScoreTrack"><div class="heatingScoreFill" style="width:${safeScore}%"></div></div>
+      ${reasons.length ? `<div class="heatingReasons">${reasons.map(escapeHtml).join(' ')}</div>` : ''}
     </div>
   `;
 }
 
-function liveTempMeter(city) {
+function marketChecklist(city) {
   return `
-    <div class="liveMeter" data-meter-city="${escapeAttribute(city.city)}">
-      <div class="liveMeterHead">
-        <div>
-          <div class="liveMeterTitle">Live Temp Meter</div>
-          <div class="liveMeterSub">Temp-only check every ${tempMeterPollSeconds} seconds while open. Fast feed is AviationWeather METAR; official feed is NWS.</div>
-        </div>
-        <div class="liveMeterPill">${escapeHtml(tempMeterPullText())}</div>
-      </div>
-      <div class="liveMeterGrid">
-        <div class="liveMeterItem primary"><span>Latest Temp</span><strong data-meter-field="current">${fmtTemp(city.latest_endpoint_temp_f ?? city.current_temp_f)}</strong></div>
-        <div class="liveMeterItem primary"><span>Fast METAR Feed</span><strong data-meter-field="fast">${fmtTemp(city.fast_metar_temp_f)}</strong></div>
-        <div class="liveMeterItem"><span>Recent Max</span><strong data-meter-field="recentMax">${recentFeedMax(city)}</strong></div>
-        <div class="liveMeterItem"><span>Rounded Now</span><strong data-meter-field="rounded">${escapeHtml(roundedOutcome(city))}</strong></div>
-        <div class="liveMeterItem"><span>Meter Refresh</span><strong data-meter-field="countdown">${escapeHtml(tempMeterCountdown(city.city))}</strong></div>
-        <div class="liveMeterItem"><span>Latest Time ET</span><strong data-meter-field="endpointTime">${escapeHtml(fmtEtTime(city.latest_endpoint_time))}</strong></div>
-        <div class="liveMeterItem"><span>Fast Feed Time ET</span><strong data-meter-field="fastTime">${escapeHtml(fmtEtTime(city.fast_metar_time))}</strong></div>
-        <div class="liveMeterItem"><span>Feed Time ET</span><strong data-meter-field="feedTime">${escapeHtml(fmtEtTime(city.latest_history_time || city.latest_observation_time))}</strong></div>
-        <div class="liveMeterItem"><span>Last Obs Age</span><strong data-meter-field="age" data-meter-obs-time="${escapeAttribute(city.latest_history_time || city.latest_observation_time || '')}">${escapeHtml(lastObsAge({latest_observation_time: city.latest_history_time || city.latest_observation_time}))}</strong></div>
-        <div class="liveMeterItem"><span>Status</span><strong data-meter-field="status">ready</strong></div>
-      </div>
-      <div data-meter-field="warning">${city.latest_feed_lag_warning ? `<div class="feedWarning">${escapeHtml(city.latest_feed_lag_note || '')}</div>` : ''}</div>
-      <div data-meter-field="feedRows">${recentObservationRows(city)}</div>
+    <div class="marketChecklist">
+      ${checkItem('Station', city.station_truth_label || 'Official station', 'NWS source used for settlement-style tracking.', '')}
+      ${checkItem('Rounding', city.rounding_risk_label || 'Rounding watch', city.rounding_risk_note || '', city.rounding_risk_label === 'Next bucket danger' ? 'warn' : '')}
+      ${checkItem('6h clue', city.six_hour_lock_label || 'No 6h max yet', city.six_hour_lock_note || '', city.six_hour_lock_temp_f ? 'warn' : '')}
+      ${checkItem('Market check', city.market_confirmation_label || 'Weather-confirmed board', city.false_pump_warning ? 'Kalshi is hotter than the weather signal.' : 'No hotter-market warning right now.', city.market_confirmation_warning ? 'bad' : '')}
     </div>
+  `;
+}
+
+function checkItem(title, label, note, className) {
+  return `
+    <div class="checkItem ${className || ''}">
+      <span>${escapeHtml(title)}</span>
+      <strong>${escapeHtml(label)}</strong>
+      ${note ? `<small>${escapeHtml(note)}</small>` : ''}
+    </div>
+  `;
+}
+
+function normalizedTempPoints(city) {
+  const byTime = new Map();
+  (city.recent_observation_points || []).forEach(point => {
+    if (point.time && point.temp_f !== null && point.temp_f !== undefined) {
+      byTime.set(point.time, {time: point.time, temp_f: Number(point.temp_f)});
+    }
+  });
+  const endpointTime = city.latest_endpoint_time || city.observation_time;
+  const endpointTemp = city.latest_endpoint_temp_f ?? city.current_temp_f;
+  if (endpointTime && endpointTemp !== null && endpointTemp !== undefined) {
+    byTime.set(endpointTime, {time: endpointTime, temp_f: Number(endpointTemp)});
+  }
+  return Array.from(byTime.values())
+    .filter(point => Number.isFinite(point.temp_f))
+    .sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime())
+    .slice(-24);
+}
+
+function tempGraphSvg(points, dayHighValue = null) {
+  if (!points.length) {
+    return '<div class="tempGraphEmpty">Waiting for NWS live feed</div>';
+  }
+  const width = 420;
+  const height = 174;
+  const pad = 16;
+  const temps = points.map(point => Number(point.temp_f)).filter(Number.isFinite);
+  const dayHigh = Number(dayHighValue);
+  let runningHigh = Number.isFinite(dayHigh) ? dayHigh : -Infinity;
+  const highPoints = points.map(point => {
+    runningHigh = Math.max(runningHigh, Number(point.temp_f));
+    return {...point, temp_f: runningHigh};
+  });
+  const allTemps = temps.concat(highPoints.map(point => point.temp_f));
+  const min = Math.floor(Math.min(...allTemps) - 1);
+  const max = Math.ceil(Math.max(...allTemps) + 1);
+  const span = Math.max(1, max - min);
+  const x = index => points.length === 1 ? width - pad : pad + (index / (points.length - 1)) * (width - pad * 2);
+  const y = temp => height - pad - ((temp - min) / span) * (height - pad * 2);
+  const line = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${x(index).toFixed(1)} ${y(point.temp_f).toFixed(1)}`).join(' ');
+  const highLine = highPoints.map((point, index) => {
+    if (index === 0) return `M ${x(index).toFixed(1)} ${y(point.temp_f).toFixed(1)}`;
+    const prev = highPoints[index - 1];
+    return `L ${x(index).toFixed(1)} ${y(prev.temp_f).toFixed(1)} L ${x(index).toFixed(1)} ${y(point.temp_f).toFixed(1)}`;
+  }).join(' ');
+  const area = `${line} L ${x(points.length - 1).toFixed(1)} ${height - pad} L ${x(0).toFixed(1)} ${height - pad} Z`;
+  const last = points[points.length - 1];
+  const lastHigh = highPoints[highPoints.length - 1];
+  return `
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Recent NWS temperature graph">
+      <path class="tempGraphArea" d="${area}"></path>
+      <path class="tempGraphPath" d="${line}"></path>
+      <path class="tempGraphHighPath" d="${highLine}"></path>
+      <circle class="tempGraphPoint" cx="${x(points.length - 1).toFixed(1)}" cy="${y(last.temp_f).toFixed(1)}" r="5"></circle>
+      <circle class="tempGraphHighPoint" cx="${x(highPoints.length - 1).toFixed(1)}" cy="${y(lastHigh.temp_f).toFixed(1)}" r="5"></circle>
+    </svg>
   `;
 }
 
@@ -696,12 +863,8 @@ function updateCountdown() {
   }
   const seconds = Math.max(0, Math.ceil((nextRefreshAt.getTime() - Date.now()) / 1000));
   updatedText.textContent = refreshCountdownText();
-  document.querySelectorAll('.finalRefreshCountdown').forEach(element => {
-    element.textContent = refreshCountdownText();
-  });
-  document.querySelectorAll('[data-meter-field="countdown"]').forEach(element => {
-    const meter = element.closest('.liveMeter');
-    element.textContent = meter ? tempMeterCountdown(meter.dataset.meterCity) : 'n/a';
+  document.querySelectorAll('[data-live-field="refresh"]').forEach(element => {
+    element.textContent = tempMeterCountdown(element.dataset.liveCity);
   });
   if (seconds <= 0 && !refreshInFlight) {
     load();
@@ -712,50 +875,11 @@ function updatePeakCountdowns() {
   document.querySelectorAll('.peakCountdown').forEach(element => {
     element.textContent = peakCountdownFromIso(element.dataset.peakTime);
   });
-  document.querySelectorAll('.obsAge').forEach(element => {
-    element.textContent = lastObsAge({latest_observation_time: element.dataset.obsTime});
-  });
-  document.querySelectorAll('.peakStatus').forEach(element => {
-    element.textContent = peakStatus({forecast_high_time: element.dataset.peakTime});
-  });
-  document.querySelectorAll('[data-meter-field="age"]').forEach(element => {
-    element.textContent = lastObsAge({latest_observation_time: element.dataset.meterObsTime});
-  });
 }
 
-cards.addEventListener('click', event => {
-  const button = event.target.closest('.finalToggle');
-  if (!button) return;
-  const card = button.closest('.card');
-  const open = !card.classList.contains('final-open');
-  if (open) {
-    openFinalCities.add(button.dataset.finalCity);
-  } else {
-    openFinalCities.delete(button.dataset.finalCity);
-  }
-  card.classList.toggle('final-open', open);
-  button.textContent = open ? 'Hide Live Temp Meter' : 'Open Live Temp Meter';
-  if (open) refreshTempMeter(button.dataset.finalCity);
-});
-
-tabButtons.forEach(button => {
-  button.addEventListener('click', () => {
-    const nextDay = button.dataset.day || 'today';
-    if (nextDay === activeDay && !refreshInFlight) return;
-    activeDay = nextDay;
-    openFinalCities.clear();
-    tempMeterNextPullAt.clear();
-    tabButtons.forEach(tab => tab.classList.toggle('active', tab.dataset.day === activeDay));
-    statusText.textContent = 'Loading';
-    updatedText.textContent = activeDay === 'tomorrow' ? 'forecast tab' : '60s backend';
-    load();
-  });
-});
-
 async function refreshTempMeter(cityName) {
-  if (!cityName || !openFinalCities.has(cityName) || tempMeterInFlight.has(cityName)) return;
+  if (!cityName || tempMeterInFlight.has(cityName)) return;
   tempMeterInFlight.add(cityName);
-  updateTempMeterStatus(cityName, 'pulling');
   try {
     const response = await fetch(`/api/temp-meter?city=${encodeURIComponent(cityName)}`, {cache: 'no-store'});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -764,57 +888,48 @@ async function refreshTempMeter(cityName) {
       tempMeterPollSeconds = Number(payload.browser_poll_seconds);
       syncPollTimers();
     }
-    updateTempMeter(payload);
+    updateLiveTempGraph(payload);
     const refreshSeconds = Number(payload.cache_ttl_seconds || payload.refresh_seconds || 3);
     tempMeterNextPullAt.set(cityName, Date.now() + refreshSeconds * 1000);
   } catch (error) {
-    updateTempMeterStatus(cityName, error.message || 'failed');
     tempMeterNextPullAt.set(cityName, Date.now() + 3000);
   } finally {
     tempMeterInFlight.delete(cityName);
   }
 }
 
-function refreshOpenTempMeters() {
-  openFinalCities.forEach(cityName => refreshTempMeter(cityName));
+function refreshVisibleTempMeters() {
+  document.querySelectorAll('[data-live-card]').forEach(card => refreshTempMeter(card.dataset.liveCard));
 }
 
-function updateTempMeter(payload) {
+function updateLiveTempGraph(payload) {
   const cityName = payload.city;
-  const meter = document.querySelector(`.liveMeter[data-meter-city="${cssEscape(cityName)}"]`);
-  if (!meter) return;
-  setMeterText(meter, 'current', fmtTemp(payload.current_temp_f));
-  setMeterText(meter, 'fast', fmtTemp(payload.fast_metar_temp_f));
-  setMeterText(meter, 'recentMax', fmtTemp(payload.recent_observation_max_f ?? payload.raw_high_so_far_f));
-  setMeterText(meter, 'rounded', payload.rounded_if_final_now_f === null || payload.rounded_if_final_now_f === undefined ? 'n/a' : `${Number(payload.rounded_if_final_now_f).toFixed(0)}F`);
-  setMeterText(meter, 'endpointTime', fmtEtTime(payload.latest_endpoint_time));
-  setMeterText(meter, 'fastTime', fmtEtTime(payload.fast_metar_time));
-  setMeterText(meter, 'feedTime', fmtEtTime(payload.latest_history_time));
-  const age = meter.querySelector('[data-meter-field="age"]');
-  if (age) {
-    age.dataset.meterObsTime = payload.latest_history_time || payload.latest_endpoint_time || '';
-    age.textContent = lastObsAge({latest_observation_time: age.dataset.meterObsTime});
-  }
-  setMeterText(meter, 'status', payload.ok ? 'live' : (payload.error || 'unavailable'));
-  const warning = meter.querySelector('[data-meter-field="warning"]');
-  if (warning) {
-    warning.innerHTML = payload.latest_feed_lag_warning ? `<div class="feedWarning">${escapeHtml(payload.latest_feed_lag_note || '')}</div>` : '';
-  }
-  const feedRows = meter.querySelector('[data-meter-field="feedRows"]');
-  if (feedRows) {
-    feedRows.innerHTML = recentObservationRows(payload);
-  }
+  setLiveField(cityName, 'current', fmtTemp(payload.current_temp_f));
+  setLiveField(cityName, 'time', fmtEtTime(payload.latest_history_time || payload.latest_endpoint_time));
+  setLiveField(cityName, 'rawHigh', fmtTemp(payload.raw_high_so_far_f));
+  setLiveField(cityName, 'rawHighTime', fmtEtTime(payload.raw_high_so_far_time));
+  setLiveField(cityName, 'rounded', payload.rounded_if_final_now_f === null || payload.rounded_if_final_now_f === undefined ? 'n/a' : `${Number(payload.rounded_if_final_now_f).toFixed(0)}F`);
+  setLiveHtml(cityName, 'graph', tempGraphSvg(normalizedTempPoints(payload), payload.raw_high_so_far_f));
+  setLiveHtml(cityName, 'chips', `
+    <span class="tempChip">Day high: ${fmtTemp(payload.raw_high_so_far_f)}${payload.raw_high_so_far_time ? ` at ${escapeHtml(fmtEtTime(payload.raw_high_so_far_time))}` : ''}</span>
+    <span class="tempChip">Recent high: ${fmtTemp(payload.recent_observation_max_f)}</span>
+    <span class="tempChip">Fast METAR: ${fmtTemp(payload.fast_metar_temp_f)}</span>
+    <span class="tempChip">Latest: ${fmtTemp(payload.current_temp_f)}</span>
+    <span class="tempChip">Checks every ${tempMeterPollSeconds}s; NWS points often post around 5 min</span>
+  `);
+  setLiveHtml(cityName, 'warning', payload.latest_feed_lag_warning ? `<div class="feedWarning">${escapeHtml(payload.latest_feed_lag_note || '')}</div>` : '');
 }
 
-function updateTempMeterStatus(cityName, status) {
-  const meter = document.querySelector(`.liveMeter[data-meter-city="${cssEscape(cityName)}"]`);
-  if (!meter) return;
-  setMeterText(meter, 'status', status);
+function setLiveField(cityName, field, text) {
+  document.querySelectorAll(`[data-live-field="${field}"][data-live-city="${cssEscape(cityName)}"]`).forEach(element => {
+    element.textContent = text;
+  });
 }
 
-function setMeterText(meter, field, text) {
-  const element = meter.querySelector(`[data-meter-field="${field}"]`);
-  if (element) element.textContent = text;
+function setLiveHtml(cityName, field, html) {
+  document.querySelectorAll(`[data-live-field="${field}"][data-live-city="${cssEscape(cityName)}"]`).forEach(element => {
+    element.innerHTML = html;
+  });
 }
 
 function cssEscape(value) {
@@ -826,7 +941,7 @@ function syncPollTimers() {
   if (mainPollTimer) clearInterval(mainPollTimer);
   if (tempMeterPollTimer) clearInterval(tempMeterPollTimer);
   mainPollTimer = setInterval(load, Math.max(1, mainPollSeconds) * 1000);
-  tempMeterPollTimer = setInterval(refreshOpenTempMeters, Math.max(1, tempMeterPollSeconds) * 1000);
+  tempMeterPollTimer = setInterval(refreshVisibleTempMeters, Math.max(1, tempMeterPollSeconds) * 1000);
 }
 
 function bucketVisual(title, bucket, className) {
@@ -865,11 +980,164 @@ function escapeAttribute(value) {
   return escapeHtml(value).replace(/`/g, '&#96;');
 }
 
+async function loadHistory() {
+  if (!historyCity || !historyCharts || historyInFlight) return;
+  historyInFlight = true;
+  historyCharts.innerHTML = '<div class="historyEmpty">Loading saved market history...</div>';
+  try {
+    const response = await fetch(`/api/history?city=${encodeURIComponent(historyCity.value)}`, {cache: 'no-store'});
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    renderHistory(await response.json());
+  } catch (error) {
+    historyCharts.innerHTML = `<div class="historyEmpty">Historic data failed to load: ${escapeHtml(error.message)}</div>`;
+  } finally {
+    historyInFlight = false;
+  }
+}
+
+function renderHistory(payload) {
+  const days = payload.days || [];
+  if (!days.length) {
+    historyCharts.innerHTML = `<div class="historyEmpty">No saved 3-day history yet for ${escapeHtml(payload.city || historyCity.value)}. Run the scanner through the day to build this view.</div>`;
+    return;
+  }
+  historyCharts.innerHTML = days.map(day => historyDayCard(day)).join('');
+}
+
+function historyDayCard(day) {
+  const points = day.series || [];
+  const bucketCount = (day.bucket_labels || []).length;
+  return `
+    <article class="historyCard">
+      <div class="historyCardHead">
+        <div>
+          <strong>${escapeHtml(day.market_date || 'Unknown date')}</strong>
+          <span>${points.length} saved pulls | ${bucketCount} buckets tracked</span>
+        </div>
+        <div class="historyLegend">
+          <span class="legendItem"><span class="legendSwatch kalshi"></span>Kalshi forecast</span>
+          <span class="legendItem"><span class="legendSwatch actual"></span>Actual temp</span>
+          <span class="legendItem"><span class="legendSwatch forecast"></span>NWS forecast</span>
+          <span class="legendItem"><span class="legendSwatch bucket"></span>Bucket prices</span>
+        </div>
+      </div>
+      <div class="historyChart">${historyChartSvg(day)}</div>
+    </article>
+  `;
+}
+
+function historyChartSvg(day) {
+  const points = (day.series || []).filter(point => point && point.captured_at);
+  if (!points.length) {
+    return '<div class="historyEmpty">No saved points for this day yet.</div>';
+  }
+  const width = 760;
+  const height = 258;
+  const left = 42;
+  const right = 18;
+  const top = 18;
+  const tempBottom = 153;
+  const priceTop = 181;
+  const priceBottom = 236;
+  const x = index => points.length === 1 ? left : left + (index / (points.length - 1)) * (width - left - right);
+
+  const tempKeys = ['kalshi_forecast_f', 'actual_temp_f', 'forecast_temp_f'];
+  const tempValues = points.flatMap(point => tempKeys.map(key => Number(point[key]))).filter(Number.isFinite);
+  const tempMin = tempValues.length ? Math.floor(Math.min(...tempValues) - 1) : 0;
+  const tempMax = tempValues.length ? Math.ceil(Math.max(...tempValues) + 1) : 1;
+  const tempSpan = Math.max(1, tempMax - tempMin);
+  const yTemp = value => tempBottom - ((Number(value) - tempMin) / tempSpan) * (tempBottom - top);
+  const yPrice = value => priceBottom - (Math.max(0, Math.min(100, Number(value))) / 100) * (priceBottom - priceTop);
+
+  const bucketLabels = topHistoryBucketLabels(day, points).slice(0, 4);
+  const bucketLines = bucketLabels.map((label, index) => {
+    const path = historyLinePath(points, point => point.bucket_prices ? point.bucket_prices[label] : null, yPrice, x);
+    if (!path) return '';
+    const color = historyBucketColor(index);
+    const circles = historyCircles(points, point => point.bucket_prices ? point.bucket_prices[label] : null, yPrice, x, color, 'bucket', point => `${historyPointTime(point)}\\n${label}: ${Number(point.bucket_prices[label]).toFixed(0)}c`);
+    return `<path class="histBucket" d="${path}" stroke="${color}"></path>${circles}`;
+  }).join('');
+
+  const kalshiPath = historyLinePath(points, point => point.kalshi_forecast_f, yTemp, x);
+  const actualPath = historyLinePath(points, point => point.actual_temp_f, yTemp, x);
+  const forecastPath = historyLinePath(points, point => point.forecast_temp_f, yTemp, x);
+
+  return `
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Historic Kalshi and weather chart for ${escapeAttribute(day.market_date || '')}">
+      <line class="histAxis" x1="${left}" x2="${width - right}" y1="${tempBottom}" y2="${tempBottom}"></line>
+      <line class="histAxis" x1="${left}" x2="${width - right}" y1="${priceTop}" y2="${priceTop}"></line>
+      <line class="histAxis" x1="${left}" x2="${width - right}" y1="${priceBottom}" y2="${priceBottom}"></line>
+      <text class="histLabel" x="8" y="${top + 7}">Temp F</text>
+      <text class="histLabel" x="8" y="${priceTop + 8}">Yes c</text>
+      <text class="histLabel" x="${left}" y="${height - 8}">${escapeHtml(historyShortTime(points[0].captured_at))}</text>
+      <text class="histLabel" x="${width - 84}" y="${height - 8}">${escapeHtml(historyShortTime(points[points.length - 1].captured_at))}</text>
+      <text class="histLabel" x="${width - 54}" y="${top + 8}">${tempMax}F</text>
+      <text class="histLabel" x="${width - 54}" y="${tempBottom - 4}">${tempMin}F</text>
+      ${kalshiPath ? `<path class="histLine histKalshi" d="${kalshiPath}"></path>` : ''}
+      ${actualPath ? `<path class="histLine histActual" d="${actualPath}"></path>` : ''}
+      ${forecastPath ? `<path class="histLine histForecast" d="${forecastPath}"></path>` : ''}
+      ${bucketLines}
+      ${historyCircles(points, point => point.kalshi_forecast_f, yTemp, x, '', 'kalshi', point => `${historyPointTime(point)}\\nKalshi forecast: ${Number(point.kalshi_forecast_f).toFixed(1)}F\\nFavorite: ${point.favorite_bucket || 'n/a'} @ ${Number(point.favorite_price || 0).toFixed(0)}c`)}
+      ${historyCircles(points, point => point.actual_temp_f, yTemp, x, '', 'actual', point => `${historyPointTime(point)}\\nActual/high-so-far: ${Number(point.actual_temp_f).toFixed(1)}F`)}
+      ${historyCircles(points, point => point.forecast_temp_f, yTemp, x, '', 'forecast', point => `${historyPointTime(point)}\\nNWS forecast: ${Number(point.forecast_temp_f).toFixed(1)}F`)}
+    </svg>
+  `;
+}
+
+function historyLinePath(points, valueFn, yFn, xFn) {
+  let path = '';
+  let hasStarted = false;
+  points.forEach((point, index) => {
+    const value = Number(valueFn(point));
+    if (!Number.isFinite(value)) {
+      hasStarted = false;
+      return;
+    }
+    path += `${hasStarted ? ' L' : ' M'} ${xFn(index).toFixed(1)} ${yFn(value).toFixed(1)}`;
+    hasStarted = true;
+  });
+  return path.trim();
+}
+
+function historyCircles(points, valueFn, yFn, xFn, color, className, titleFn) {
+  return points.map((point, index) => {
+    const value = Number(valueFn(point));
+    if (!Number.isFinite(value)) return '';
+    const fill = color ? ` fill="${color}"` : '';
+    return `<circle class="histPoint ${className}" cx="${xFn(index).toFixed(1)}" cy="${yFn(value).toFixed(1)}" r="4"${fill}><title>${escapeHtml(titleFn(point))}</title></circle>`;
+  }).join('');
+}
+
+function topHistoryBucketLabels(day, points) {
+  const labels = new Set(day.bucket_labels || []);
+  points.forEach(point => Object.keys(point.bucket_prices || {}).forEach(label => labels.add(label)));
+  return Array.from(labels).sort((a, b) => historyBucketMax(points, b) - historyBucketMax(points, a));
+}
+
+function historyBucketMax(points, label) {
+  return Math.max(0, ...points.map(point => Number(point.bucket_prices ? point.bucket_prices[label] : null)).filter(Number.isFinite));
+}
+
+function historyBucketColor(index) {
+  return ['#45c8d8', '#d49b31', '#a178ff', '#ff7e67'][index % 4];
+}
+
+function historyPointTime(point) {
+  return historyShortTime(point.captured_at);
+}
+
+function historyShortTime(value) {
+  if (!value) return 'n/a';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'n/a';
+  return date.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York'});
+}
+
 async function load() {
   if (refreshInFlight) return;
   refreshInFlight = true;
   try {
-    const response = await fetch(`/api/live?day=${encodeURIComponent(activeDay)}`, {cache: 'no-store'});
+    const response = await fetch('/api/live', {cache: 'no-store'});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     render(await response.json());
   } catch (error) {
@@ -881,6 +1149,8 @@ async function load() {
 }
 
 load();
+loadHistory();
+if (historyCity) historyCity.addEventListener('change', loadHistory);
 syncPollTimers();
 setInterval(() => {
   updateCountdown();

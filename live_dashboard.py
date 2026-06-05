@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
+import re
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
-from config import CITY_CONFIGS, _with_market_date_suffix, city_configs_for_date, next_market_date
+from config import CITY_CONFIGS, _with_market_date_suffix
 from decision_layer import enrich_decision_layer
 from kalshi_api import fetch_kalshi_api_observation
 from scoring import score_market
@@ -23,14 +24,14 @@ def _env_int(name: str, default: int) -> int:
 LIVE_CITY_NAMES = ("Phoenix", "Las Vegas", "San Antonio")
 PUBLIC_TRAFFIC_MODE = os.environ.get("PUBLIC_TRAFFIC_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
 DEFAULT_CACHE_TTL_SECONDS = _env_int("LIVE_DASHBOARD_CACHE_SECONDS", 60)
-LIVE_TEMP_METER_TTL_SECONDS = _env_int("LIVE_TEMP_METER_CACHE_SECONDS", 5 if PUBLIC_TRAFFIC_MODE else 3)
+LIVE_TEMP_METER_TTL_SECONDS = _env_int("LIVE_TEMP_METER_CACHE_SECONDS", 10)
 BROWSER_POLL_SECONDS = _env_int("LIVE_DASHBOARD_BROWSER_POLL_SECONDS", 60 if PUBLIC_TRAFFIC_MODE else 15)
-TEMP_METER_BROWSER_POLL_SECONDS = _env_int("LIVE_TEMP_METER_BROWSER_POLL_SECONDS", 10 if PUBLIC_TRAFFIC_MODE else 3)
+TEMP_METER_BROWSER_POLL_SECONDS = _env_int("LIVE_TEMP_METER_BROWSER_POLL_SECONDS", 10)
 
 
 def selected_live_city_configs(day: str = "today") -> list[dict[str, Any]]:
     wanted = set(LIVE_CITY_NAMES)
-    configs = current_live_city_configs() if day != "tomorrow" else city_configs_for_date(next_market_date())
+    configs = current_live_city_configs()
     return [config for config in configs if config["city"] in wanted]
 
 
@@ -77,6 +78,7 @@ def build_city_payload(
     top, second = favorite_buckets(market)
     warnings = list(weather.get("warnings") or []) + list(market.get("warnings") or [])
     feed_summary = recent_observation_feed_summary(weather)
+    market_checklist = build_market_checklist(scored, weather)
     return {
         "city": city_config["city"],
         "station_id": weather.get("station_id"),
@@ -99,12 +101,17 @@ def build_city_payload(
         "latest_feed_lag_warning": feed_summary["latest_feed_lag_warning"],
         "latest_feed_lag_note": feed_summary["latest_feed_lag_note"],
         "raw_high_so_far_f": scored.get("raw_high_so_far_f"),
+        "raw_high_so_far_time": scored.get("raw_high_so_far_time") or weather.get("raw_high_so_far_time"),
         "high_so_far_f": scored.get("high_so_far_f"),
         "latest_observation_time": scored.get("latest_observation_time"),
         "forecast_high_f": scored.get("forecast_high_f"),
         "forecast_high_time": scored.get("forecast_high_time"),
         "critical_window_et": scored.get("critical_window_et"),
         "heating_rate_f_per_hour": scored.get("heating_rate_f_per_hour"),
+        "heating_status_score": scored.get("heating_status_score"),
+        "heating_status_label": scored.get("heating_status_label"),
+        "heating_status_reasons": scored.get("heating_status_reasons"),
+        **market_checklist,
         "required_rate_f_per_hour": scored.get("required_rate_f_per_hour"),
         "degrees_needed_to_reach_bucket": scored.get("degrees_needed_to_reach_bucket"),
         "reachability_label": scored.get("reachability_label"),
@@ -118,6 +125,81 @@ def build_city_payload(
         "kalshi_url": scored.get("kalshi_url"),
         "warnings": warnings,
     }
+
+
+def build_market_checklist(scored: dict[str, Any], weather: dict[str, Any]) -> dict[str, Any]:
+    station_id = str(weather.get("station_id") or scored.get("station_id") or "").strip()
+    raw_high = _to_float(scored.get("raw_high_so_far_f"))
+    rounded_high = _to_float(scored.get("high_so_far_f"))
+    metar_max = parse_metar_max_temp_f(weather.get("fast_metar_raw"))
+    false_pump = bool(scored.get("false_pump_warning"))
+
+    return {
+        "station_truth_label": f"Official station {station_id}" if station_id else "Official station",
+        "rounding_risk_label": _rounding_risk_label(raw_high),
+        "rounding_risk_note": _rounding_risk_note(raw_high),
+        "six_hour_lock_label": _six_hour_lock_label(metar_max),
+        "six_hour_lock_temp_f": metar_max,
+        "six_hour_lock_note": _six_hour_lock_note(metar_max, rounded_high),
+        "market_confirmation_label": "Market hotter than weather" if false_pump else "Weather-confirmed board",
+        "market_confirmation_warning": false_pump,
+    }
+
+
+def parse_metar_max_temp_f(raw_message: Any) -> float | None:
+    raw = str(raw_message or "")
+    six_hour = re.search(r"(?:^|\s)1([01])(\d{3})(?:\s|$)", raw)
+    if six_hour:
+        return _c_to_f_tenths(sign=six_hour.group(1), tenths=six_hour.group(2))
+
+    daily = re.search(r"(?:^|\s)4([01])(\d{3})([01])(\d{3})(?:\s|$)", raw)
+    if daily:
+        return _c_to_f_tenths(sign=daily.group(1), tenths=daily.group(2))
+    return None
+
+
+def _c_to_f_tenths(*, sign: str, tenths: str) -> float:
+    celsius = int(tenths) / 10
+    if sign == "1":
+        celsius *= -1
+    return round(celsius * 9 / 5 + 32, 1)
+
+
+def _rounding_risk_label(raw_high: float | None) -> str:
+    if raw_high is None:
+        return "Waiting for high"
+    distance = _next_rounding_distance(raw_high)
+    if distance <= 0.3:
+        return "Next bucket danger"
+    if distance <= 1.0:
+        return "Rounding watch"
+    return "Rounding stable"
+
+
+def _rounding_risk_note(raw_high: float | None) -> str:
+    if raw_high is None:
+        return "No official high-so-far yet."
+    rounded = int(raw_high + 0.5)
+    distance = _next_rounding_distance(raw_high)
+    return f"{distance:.1f}F from rounding into {rounded + 1}F."
+
+
+def _next_rounding_distance(raw_high: float) -> float:
+    rounded = int(raw_high + 0.5)
+    return max(0.0, (rounded + 0.5) - raw_high)
+
+
+def _six_hour_lock_label(metar_max: float | None) -> str:
+    return "6h max clue" if metar_max is not None else "No 6h max yet"
+
+
+def _six_hour_lock_note(metar_max: float | None, rounded_high: float | None) -> str:
+    if metar_max is None:
+        return "Watching METAR remarks for a 6h/24h max temp clue."
+    rounded = int(metar_max + 0.5)
+    if rounded_high is not None and rounded >= int(rounded_high):
+        return f"METAR max points to {metar_max:.1f}F, rounds {rounded}F."
+    return f"METAR max points to {metar_max:.1f}F."
 
 
 def market_date_label(cities: list[dict[str, Any]]) -> str:
@@ -235,6 +317,7 @@ def collect_live_temp_meter(city_name: str) -> dict[str, Any]:
         "fast_feed_source": weather.get("fast_feed_source"),
         "fast_feed_url": weather.get("fast_feed_url"),
         "raw_high_so_far_f": raw_high,
+        "raw_high_so_far_time": weather.get("raw_high_so_far_time"),
         "high_so_far_f": rounded_high,
         "rounded_if_final_now_f": rounded_high,
         "recent_observation_points": feed_summary["recent_observation_points"],
@@ -328,7 +411,7 @@ def _bucket_payload(contract: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 def normalize_live_day(day: str) -> str:
-    return "tomorrow" if str(day).strip().lower() == "tomorrow" else "today"
+    return "today"
 
 
 def _history_is_ahead(endpoint_time: Any, history_time: Any) -> bool:

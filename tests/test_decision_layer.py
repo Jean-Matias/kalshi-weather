@@ -113,6 +113,52 @@ class DecisionLayerTests(unittest.TestCase):
         self.assertFalse(row["false_pump_warning"])
         self.assertIn(row["reachability_label"], {"REACHABLE", "STRETCH"})
 
+    def test_heating_status_scores_clear_rising_pre_peak_weather_as_heating(self):
+        row = enrich_decision_layer(
+            base_row(
+                city="Las Vegas",
+                current_temp_f=103.0,
+                raw_high_so_far_f=103.0,
+                high_so_far_f=103.0,
+                forecast_high_f=106.0,
+                forecast_high_time="2026-06-05T17:00:00-07:00",
+                market_local_time="2026-06-05T15:00:00-07:00",
+                heating_rate_f_per_hour=2.1,
+                cloud_text="Clear",
+                humidity=6,
+                humidity_trend=-2,
+                wind_speed_mph=14,
+                wind_direction_deg=220,
+                forecast_hourly_temps_f=[103, 104, 105, 106],
+            )
+        )
+
+        self.assertGreaterEqual(row["heating_status_score"], 80)
+        self.assertEqual(row["heating_status_label"], "HEATING")
+        self.assertIn("rising", row["heating_status_reasons"][0].lower())
+
+    def test_heating_status_scores_post_peak_falling_weather_as_likely_done(self):
+        row = enrich_decision_layer(
+            base_row(
+                current_temp_f=89.0,
+                raw_high_so_far_f=91.4,
+                high_so_far_f=91.0,
+                forecast_high_f=91.0,
+                forecast_high_time="2026-06-05T15:00:00-05:00",
+                market_local_time="2026-06-05T16:30:00-05:00",
+                heating_rate_f_per_hour=-1.2,
+                cloud_text="Mostly Cloudy",
+                humidity=58,
+                humidity_trend=8,
+                wind_speed_mph=5,
+                forecast_hourly_temps_f=[91, 90, 89, 88],
+            )
+        )
+
+        self.assertLessEqual(row["heating_status_score"], 25)
+        self.assertEqual(row["heating_status_label"], "LIKELY DONE")
+        self.assertIn("past peak", " ".join(row["heating_status_reasons"]).lower())
+
 
 if __name__ == "__main__":
     unittest.main()
