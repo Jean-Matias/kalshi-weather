@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from history_data import load_historical_payload
+from history_data import load_kalshi_candle_history
 from live_dashboard import LiveDashboardCache, LiveTempMeterCache
 
 app = FastAPI(title="Kalshi Weather Live Dashboard")
@@ -33,7 +33,7 @@ def api_temp_meter(city: str) -> JSONResponse:
 
 @app.get("/api/history")
 def api_history(city: str = "Las Vegas") -> JSONResponse:
-    return JSONResponse(load_historical_payload(city, days=3))
+    return JSONResponse(load_kalshi_candle_history(city, days=3))
 
 
 def _dashboard_html() -> str:
@@ -84,7 +84,7 @@ def _dashboard_html() -> str:
         <div>
           <span>Historic Data</span>
           <strong>3-day market history</strong>
-          <p>Saved snapshots only. This section is meant for pattern-reading, not live refresh.</p>
+          <p>Kalshi-only crowd forecast from event candlesticks. Hover the line to see favorite buckets through the day.</p>
         </div>
         <label>
           City
@@ -460,6 +460,27 @@ p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
 .histPoint.actual { fill: var(--good); }
 .histPoint.forecast { fill: #dbe8ef; }
 .histPoint.bucket { stroke-width: 1; opacity: 0.88; }
+.bucketLeaderboard {
+  display: grid;
+  gap: 7px;
+  grid-template-columns: repeat(3, 1fr);
+  margin-top: 10px;
+}
+.bucketPill {
+  background: #0c141b;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  display: flex;
+  font-size: 12px;
+  font-weight: 850;
+  gap: 8px;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 7px 9px;
+}
+.bucketPill strong { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bucketPill span { color: var(--good); white-space: nowrap; }
 .historyEmpty {
   align-items: center;
   border: 1px dashed var(--line);
@@ -486,6 +507,7 @@ p { margin: 7px 0 0; color: var(--muted); line-height: 1.45; }
   .historyHead { flex-direction: column; }
   .historyHead label { width: 100%; }
   .historyLegend { justify-content: flex-start; }
+  .bucketLeaderboard { grid-template-columns: 1fr; }
 }
 @media (max-width: 560px) {
   .shell { padding: 14px; }
@@ -998,7 +1020,7 @@ async function loadHistory() {
 function renderHistory(payload) {
   const days = payload.days || [];
   if (!days.length) {
-    historyCharts.innerHTML = `<div class="historyEmpty">No saved 3-day history yet for ${escapeHtml(payload.city || historyCity.value)}. Run the scanner through the day to build this view.</div>`;
+    historyCharts.innerHTML = `<div class="historyEmpty">No Kalshi candle history found for ${escapeHtml(payload.city || historyCity.value)} yet.</div>`;
     return;
   }
   historyCharts.innerHTML = days.map(day => historyDayCard(day)).join('');
@@ -1007,21 +1029,21 @@ function renderHistory(payload) {
 function historyDayCard(day) {
   const points = day.series || [];
   const bucketCount = (day.bucket_labels || []).length;
+  const latest = points.length ? points[points.length - 1] : null;
   return `
     <article class="historyCard">
       <div class="historyCardHead">
         <div>
           <strong>${escapeHtml(day.market_date || 'Unknown date')}</strong>
-          <span>${points.length} saved pulls | ${bucketCount} buckets tracked</span>
+          <span>${points.length} Kalshi candles | ${bucketCount} buckets tracked${latest?.kalshi_forecast_f ? ` | last forecast ${fmtTemp(latest.kalshi_forecast_f)}` : ''}</span>
         </div>
         <div class="historyLegend">
-          <span class="legendItem"><span class="legendSwatch kalshi"></span>Kalshi forecast</span>
-          <span class="legendItem"><span class="legendSwatch actual"></span>Actual temp</span>
-          <span class="legendItem"><span class="legendSwatch forecast"></span>NWS forecast</span>
-          <span class="legendItem"><span class="legendSwatch bucket"></span>Bucket prices</span>
+          <span class="legendItem"><span class="legendSwatch kalshi"></span>Crowd forecast</span>
+          <span class="legendItem"><span class="legendSwatch bucket"></span>Latest buckets</span>
         </div>
       </div>
       <div class="historyChart">${historyChartSvg(day)}</div>
+      ${bucketLeaderboard(day)}
     </article>
   `;
 }
@@ -1029,58 +1051,53 @@ function historyDayCard(day) {
 function historyChartSvg(day) {
   const points = (day.series || []).filter(point => point && point.captured_at);
   if (!points.length) {
-    return '<div class="historyEmpty">No saved points for this day yet.</div>';
+    return '<div class="historyEmpty">No Kalshi candles for this day yet.</div>';
   }
   const width = 760;
   const height = 258;
   const left = 42;
   const right = 18;
   const top = 18;
-  const tempBottom = 153;
-  const priceTop = 181;
-  const priceBottom = 236;
+  const bottom = 222;
   const x = index => points.length === 1 ? left : left + (index / (points.length - 1)) * (width - left - right);
-
-  const tempKeys = ['kalshi_forecast_f', 'actual_temp_f', 'forecast_temp_f'];
-  const tempValues = points.flatMap(point => tempKeys.map(key => Number(point[key]))).filter(Number.isFinite);
+  const tempValues = points.map(point => Number(point.kalshi_forecast_f)).filter(Number.isFinite);
   const tempMin = tempValues.length ? Math.floor(Math.min(...tempValues) - 1) : 0;
   const tempMax = tempValues.length ? Math.ceil(Math.max(...tempValues) + 1) : 1;
   const tempSpan = Math.max(1, tempMax - tempMin);
-  const yTemp = value => tempBottom - ((Number(value) - tempMin) / tempSpan) * (tempBottom - top);
-  const yPrice = value => priceBottom - (Math.max(0, Math.min(100, Number(value))) / 100) * (priceBottom - priceTop);
-
-  const bucketLabels = topHistoryBucketLabels(day, points).slice(0, 4);
-  const bucketLines = bucketLabels.map((label, index) => {
-    const path = historyLinePath(points, point => point.bucket_prices ? point.bucket_prices[label] : null, yPrice, x);
-    if (!path) return '';
-    const color = historyBucketColor(index);
-    const circles = historyCircles(points, point => point.bucket_prices ? point.bucket_prices[label] : null, yPrice, x, color, 'bucket', point => `${historyPointTime(point)}\\n${label}: ${Number(point.bucket_prices[label]).toFixed(0)}c`);
-    return `<path class="histBucket" d="${path}" stroke="${color}"></path>${circles}`;
-  }).join('');
-
+  const yTemp = value => bottom - ((Number(value) - tempMin) / tempSpan) * (bottom - top);
   const kalshiPath = historyLinePath(points, point => point.kalshi_forecast_f, yTemp, x);
-  const actualPath = historyLinePath(points, point => point.actual_temp_f, yTemp, x);
-  const forecastPath = historyLinePath(points, point => point.forecast_temp_f, yTemp, x);
+  const area = kalshiPath ? `${kalshiPath} L ${x(points.length - 1).toFixed(1)} ${bottom} L ${x(0).toFixed(1)} ${bottom} Z` : '';
+  const last = points[points.length - 1];
 
   return `
     <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Historic Kalshi and weather chart for ${escapeAttribute(day.market_date || '')}">
-      <line class="histAxis" x1="${left}" x2="${width - right}" y1="${tempBottom}" y2="${tempBottom}"></line>
-      <line class="histAxis" x1="${left}" x2="${width - right}" y1="${priceTop}" y2="${priceTop}"></line>
-      <line class="histAxis" x1="${left}" x2="${width - right}" y1="${priceBottom}" y2="${priceBottom}"></line>
-      <text class="histLabel" x="8" y="${top + 7}">Temp F</text>
-      <text class="histLabel" x="8" y="${priceTop + 8}">Yes c</text>
+      <line class="histAxis" x1="${left}" x2="${width - right}" y1="${bottom}" y2="${bottom}"></line>
+      <line class="histAxis" x1="${left}" x2="${width - right}" y1="${top}" y2="${top}"></line>
+      <text class="histLabel" x="8" y="${top + 7}">Forecast</text>
       <text class="histLabel" x="${left}" y="${height - 8}">${escapeHtml(historyShortTime(points[0].captured_at))}</text>
       <text class="histLabel" x="${width - 84}" y="${height - 8}">${escapeHtml(historyShortTime(points[points.length - 1].captured_at))}</text>
       <text class="histLabel" x="${width - 54}" y="${top + 8}">${tempMax}F</text>
-      <text class="histLabel" x="${width - 54}" y="${tempBottom - 4}">${tempMin}F</text>
+      <text class="histLabel" x="${width - 54}" y="${bottom - 4}">${tempMin}F</text>
+      ${area ? `<path class="tempGraphArea" d="${area}"></path>` : ''}
       ${kalshiPath ? `<path class="histLine histKalshi" d="${kalshiPath}"></path>` : ''}
-      ${actualPath ? `<path class="histLine histActual" d="${actualPath}"></path>` : ''}
-      ${forecastPath ? `<path class="histLine histForecast" d="${forecastPath}"></path>` : ''}
-      ${bucketLines}
-      ${historyCircles(points, point => point.kalshi_forecast_f, yTemp, x, '', 'kalshi', point => `${historyPointTime(point)}\\nKalshi forecast: ${Number(point.kalshi_forecast_f).toFixed(1)}F\\nFavorite: ${point.favorite_bucket || 'n/a'} @ ${Number(point.favorite_price || 0).toFixed(0)}c`)}
-      ${historyCircles(points, point => point.actual_temp_f, yTemp, x, '', 'actual', point => `${historyPointTime(point)}\\nActual/high-so-far: ${Number(point.actual_temp_f).toFixed(1)}F`)}
-      ${historyCircles(points, point => point.forecast_temp_f, yTemp, x, '', 'forecast', point => `${historyPointTime(point)}\\nNWS forecast: ${Number(point.forecast_temp_f).toFixed(1)}F`)}
+      ${historyCircles(points, point => point.kalshi_forecast_f, yTemp, x, '', 'kalshi', point => `${historyPointTime(point)}\\nCrowd forecast: ${Number(point.kalshi_forecast_f).toFixed(1)}F\\nFavorite: ${point.favorite_bucket || 'n/a'} @ ${Number(point.favorite_price || 0).toFixed(0)}c`)}
+      ${last && Number.isFinite(Number(last.kalshi_forecast_f)) ? `<circle class="tempGraphHighPoint" cx="${x(points.length - 1).toFixed(1)}" cy="${yTemp(last.kalshi_forecast_f).toFixed(1)}" r="7"><title>${escapeHtml(`Latest\\nCrowd forecast: ${Number(last.kalshi_forecast_f).toFixed(1)}F\\nFavorite: ${last.favorite_bucket || 'n/a'} @ ${Number(last.favorite_price || 0).toFixed(0)}c`)}</title></circle>` : ''}
     </svg>
+  `;
+}
+
+function bucketLeaderboard(day) {
+  const buckets = (day.latest_buckets || []).slice(0, 6);
+  if (!buckets.length) return '';
+  return `
+    <div class="bucketLeaderboard">
+      ${buckets.map(bucket => `
+        <div class="bucketPill">
+          <strong>${escapeHtml(bucket.label || 'n/a')}</strong>
+          <span>${Number(bucket.price || 0).toFixed(0)}c</span>
+        </div>
+      `).join('')}
+    </div>
   `;
 }
 

@@ -356,7 +356,7 @@ class LiveDashboardAppTests(unittest.TestCase):
 
         client = TestClient(live_app.app)
         with patch(
-            "live_app.load_historical_payload",
+            "live_app.load_kalshi_candle_history",
             return_value={"city": "Las Vegas", "days": [{"market_date": "2026-06-03"}]},
         ) as loader:
             response = client.get("/api/history?city=Las%20Vegas")

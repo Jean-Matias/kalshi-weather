@@ -2,10 +2,19 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
 
-from config import DATABASE_PATH
+from config import CITY_CONFIGS, DATABASE_PATH, USER_AGENT, city_configs_for_date
+
+
+KALSHI_CANDLE_TIMEOUT_SECONDS = 20
+KALSHI_API_BASE_URL = "https://external-api.kalshi.com/trade-api/v2"
 
 
 def load_historical_payload(
@@ -38,6 +47,243 @@ def load_historical_payload(
     finally:
         if close_conn:
             conn.close()
+
+
+def load_kalshi_candle_history(
+    city: str,
+    *,
+    days: int = 3,
+    now: datetime | None = None,
+    fetch_json: Any | None = None,
+) -> dict[str, Any]:
+    base_config = _city_config(city)
+    if not base_config:
+        return {"city": city, "days": [], "source": "kalshi_event_candlesticks", "warnings": ["Unknown city."]}
+    tz = ZoneInfo(base_config["timezone"])
+    local_now = (now or datetime.now(tz)).astimezone(tz)
+    fetch = fetch_json or _fetch_json
+    day_payloads = []
+    for offset in range(days):
+        market_day = local_now.date() - timedelta(days=offset)
+        market_date = market_day.isoformat()
+        config = _city_config_for_market_date(city, market_date)
+        if not config:
+            continue
+        start_local = datetime.combine(market_day, datetime.min.time(), tzinfo=tz)
+        if offset == 0:
+            end_local = local_now
+        else:
+            end_local = start_local + timedelta(days=1)
+        day_payloads.append(_kalshi_candle_day(config, start_local, end_local, fetch))
+    return {"city": city, "days": day_payloads, "source": "kalshi_event_candlesticks"}
+
+
+def _kalshi_candle_day(
+    config: dict[str, Any],
+    start_local: datetime,
+    end_local: datetime,
+    fetch_json: Any,
+) -> dict[str, Any]:
+    event_ticker = config["kalshi_event_ticker"]
+    series_ticker = _series_ticker(event_ticker)
+    market_date = start_local.date().isoformat()
+    try:
+        event_payload = fetch_json(f"{KALSHI_API_BASE_URL}/events/{event_ticker}")
+        markets = event_payload.get("markets") or []
+        contracts = [_contract_from_market(market) for market in markets]
+        contracts = [contract for contract in contracts if contract]
+        candles_url = _candles_url(series_ticker, event_ticker, start_local, end_local)
+        candles_payload = fetch_json(candles_url)
+        day = _day_from_kalshi_candles(
+            market_date=market_date,
+            event_ticker=event_ticker,
+            series_ticker=series_ticker,
+            contracts=contracts,
+            candles_payload=candles_payload,
+        )
+        day["api_url"] = candles_url
+        return day
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, KeyError, ValueError) as exc:
+        return {
+            "market_date": market_date,
+            "event_ticker": event_ticker,
+            "series_ticker": series_ticker,
+            "point_count": 0,
+            "bucket_labels": [],
+            "latest_buckets": [],
+            "series": [],
+            "warnings": [f"Kalshi candle history unavailable: {exc}"],
+        }
+
+
+def _day_from_kalshi_candles(
+    *,
+    market_date: str,
+    event_ticker: str,
+    series_ticker: str,
+    contracts: list[dict[str, Any]],
+    candles_payload: dict[str, Any],
+) -> dict[str, Any]:
+    contract_by_ticker = {contract["ticker"]: contract for contract in contracts if contract.get("ticker")}
+    bucket_labels = [contract["label"] for contract in contracts if contract.get("label")]
+    points_by_ts: dict[int, dict[str, Any]] = {}
+    tickers = candles_payload.get("market_tickers") or []
+    candle_arrays = candles_payload.get("market_candlesticks") or []
+    for ticker, candle_list in zip(tickers, candle_arrays):
+        contract = contract_by_ticker.get(ticker)
+        if not contract:
+            continue
+        label = contract["label"]
+        for candle in candle_list or []:
+            timestamp = _to_int(candle.get("end_period_ts"))
+            price = _candle_price_cents(candle)
+            if timestamp is None or price is None:
+                continue
+            point = points_by_ts.setdefault(timestamp, {"bucket_prices": {}})
+            point["bucket_prices"][label] = price
+    series = []
+    for timestamp in sorted(points_by_ts):
+        bucket_prices = points_by_ts[timestamp]["bucket_prices"]
+        enriched_buckets = [
+            {
+                "label": label,
+                "price": price,
+                "midpoint_f": _contract_midpoint(contract_by_label(contracts, label)),
+            }
+            for label, price in bucket_prices.items()
+        ]
+        weighted_forecast = _weighted_forecast(enriched_buckets)
+        favorite = max(enriched_buckets, key=lambda bucket: bucket["price"]) if enriched_buckets else None
+        series.append(
+            {
+                "captured_at": datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat(),
+                "end_period_ts": timestamp,
+                "kalshi_forecast_f": weighted_forecast,
+                "favorite_bucket": favorite["label"] if favorite else None,
+                "favorite_price": favorite["price"] if favorite else None,
+                "bucket_prices": bucket_prices,
+            }
+        )
+    latest_prices = series[-1]["bucket_prices"] if series else {}
+    latest_buckets = sorted(
+        [{"label": label, "price": price} for label, price in latest_prices.items()],
+        key=lambda bucket: bucket["price"],
+        reverse=True,
+    )
+    return {
+        "market_date": market_date,
+        "event_ticker": event_ticker,
+        "series_ticker": series_ticker,
+        "point_count": len(series),
+        "bucket_labels": bucket_labels,
+        "latest_buckets": latest_buckets,
+        "series": series,
+        "warnings": [],
+    }
+
+
+def _candles_url(series_ticker: str, event_ticker: str, start_local: datetime, end_local: datetime) -> str:
+    params = urlencode(
+        {
+            "start_ts": int(start_local.astimezone(timezone.utc).timestamp()),
+            "end_ts": int(end_local.astimezone(timezone.utc).timestamp()),
+            "period_interval": 1,
+        }
+    )
+    return f"{KALSHI_API_BASE_URL}/series/{series_ticker}/events/{event_ticker}/candlesticks?{params}"
+
+
+def _fetch_json(url: str) -> dict[str, Any]:
+    request = Request(url, headers={"User-Agent": USER_AGENT})
+    with urlopen(request, timeout=KALSHI_CANDLE_TIMEOUT_SECONDS) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _city_config(city: str) -> dict[str, Any] | None:
+    return next((config for config in CITY_CONFIGS if config["city"] == city), None)
+
+
+def _city_config_for_market_date(city: str, market_date: str) -> dict[str, Any] | None:
+    return next((config for config in city_configs_for_date(market_date) if config["city"] == city), None)
+
+
+def _series_ticker(event_ticker: str) -> str:
+    return event_ticker.rsplit("-", 1)[0]
+
+
+def _contract_from_market(market: dict[str, Any]) -> dict[str, Any] | None:
+    low, high = _range_from_api_market(market)
+    if low is None and high is None:
+        return None
+    return {
+        "ticker": market.get("ticker"),
+        "label": _format_range(low, high),
+        "low_f": low,
+        "high_f": high,
+    }
+
+
+def _range_from_api_market(market: dict[str, Any]) -> tuple[float | None, float | None]:
+    strike_type = str(market.get("strike_type") or "").lower()
+    floor = _to_float(market.get("floor_strike"))
+    cap = _to_float(market.get("cap_strike"))
+    if strike_type == "less" and cap is not None:
+        return None, cap - 1
+    if strike_type == "greater" and floor is not None:
+        return floor + 1, None
+    if strike_type == "between":
+        return floor, cap
+    return floor, cap
+
+
+def _format_range(low: float | None, high: float | None) -> str:
+    if low is None and high is not None:
+        return f"{high:.0f}F or below"
+    if high is None and low is not None:
+        return f"{low:.0f}F or above"
+    if low is not None and high is not None:
+        return f"{low:.0f}F to {high:.0f}F"
+    return "unknown"
+
+
+def contract_by_label(contracts: list[dict[str, Any]], label: str) -> dict[str, Any] | None:
+    return next((contract for contract in contracts if contract.get("label") == label), None)
+
+
+def _candle_price_cents(candle: dict[str, Any]) -> float | None:
+    for path in (
+        ("price", "close_dollars"),
+        ("price", "previous_dollars"),
+        ("yes_ask", "close_dollars"),
+        ("yes_bid", "close_dollars"),
+    ):
+        value = candle.get(path[0], {}).get(path[1])
+        number = _to_float(value)
+        if number is not None:
+            return round(number * 100, 1)
+    return None
+
+
+def _weighted_forecast(buckets: list[dict[str, Any]]) -> float | None:
+    usable = [
+        bucket
+        for bucket in buckets
+        if _to_float(bucket.get("price")) is not None and _to_float(bucket.get("midpoint_f")) is not None
+    ]
+    total = sum(float(bucket["price"]) for bucket in usable)
+    if total <= 0:
+        return None
+    value = sum(float(bucket["midpoint_f"]) * float(bucket["price"]) for bucket in usable) / total
+    return round(value, 1)
+
+
+def _to_int(value: Any) -> int | None:
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _rows(conn: sqlite3.Connection, table: str, city: str) -> list[sqlite3.Row]:

@@ -2,7 +2,10 @@ import json
 import sqlite3
 import unittest
 
-from history_data import load_historical_payload
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+from history_data import load_historical_payload, load_kalshi_candle_history
 
 
 def insert_snapshot(conn, table, captured_at, city, payload):
@@ -120,6 +123,62 @@ class HistoryDataTests(unittest.TestCase):
 
         self.assertEqual(payload["city"], "Phoenix")
         self.assertEqual(payload["days"], [])
+
+    def test_load_kalshi_candle_history_builds_crowd_forecast_line(self):
+        def fake_fetch(url):
+            if "/events/" in url and "/candlesticks" not in url:
+                return {
+                    "markets": [
+                        {
+                            "ticker": "KXHIGHTLV-26JUN05-B104.5",
+                            "strike_type": "between",
+                            "floor_strike": 105,
+                            "cap_strike": 106,
+                        },
+                        {
+                            "ticker": "KXHIGHTLV-26JUN05-B106.5",
+                            "strike_type": "between",
+                            "floor_strike": 107,
+                            "cap_strike": 108,
+                        },
+                    ]
+                }
+            return {
+                "market_tickers": ["KXHIGHTLV-26JUN05-B104.5", "KXHIGHTLV-26JUN05-B106.5"],
+                "market_candlesticks": [
+                    [
+                        {
+                            "end_period_ts": 1780603200,
+                            "price": {"close_dollars": "0.7000"},
+                            "yes_ask": {"close_dollars": "0.7100"},
+                        }
+                    ],
+                    [
+                        {
+                            "end_period_ts": 1780603200,
+                            "price": {"close_dollars": "0.3000"},
+                            "yes_ask": {"close_dollars": "0.3100"},
+                        }
+                    ],
+                ],
+            }
+
+        payload = load_kalshi_candle_history(
+            "Las Vegas",
+            days=1,
+            now=datetime(2026, 6, 5, 12, 0, tzinfo=ZoneInfo("America/Los_Angeles")),
+            fetch_json=fake_fetch,
+        )
+
+        self.assertEqual(payload["city"], "Las Vegas")
+        day = payload["days"][0]
+        self.assertEqual(day["event_ticker"], "KXHIGHTLV-26JUN05")
+        self.assertEqual(day["point_count"], 1)
+        point = day["series"][0]
+        self.assertEqual(point["favorite_bucket"], "105F to 106F")
+        self.assertEqual(point["favorite_price"], 70.0)
+        self.assertEqual(point["kalshi_forecast_f"], 106.1)
+        self.assertEqual(day["latest_buckets"][0]["label"], "105F to 106F")
 
 
 if __name__ == "__main__":
