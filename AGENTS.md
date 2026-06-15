@@ -15,7 +15,6 @@ Markdown report. It must never place trades.
 
 ## Hard Rules
 
-- Do not add order placement, trading, portfolio, or account mutation behavior.
 - Do not use paid APIs.
 - Prefer free weather sources: weather.gov/NWS, forecast.weather.gov XML, and
   Open-Meteo fallback data.

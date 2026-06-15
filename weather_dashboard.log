@@ -1,0 +1,10 @@
+INFO:     Started server process [170856]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8092 (Press CTRL+C to quit)
+INFO:     127.0.0.1:50099 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50103 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50104 - "GET /api/history?city=Las%20Vegas HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57746 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57747 - "GET /api/history?city=Phoenix HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57162 - "GET /api/history?city=San%20Antonio HTTP/1.1" 200 OK
