@@ -50,7 +50,7 @@ def log_trade(
 
 def daily_pnl(conn: sqlite3.Connection, date_str: str) -> float:
     row = conn.execute(
-        "SELECT COALESCE(SUM(pnl), 0) FROM trades WHERE ts LIKE ? AND pnl IS NOT NULL",
-        (f"{date_str}%",),
+        "SELECT COALESCE(SUM(pnl), 0) FROM trades WHERE substr(ts, 1, 10) = ? AND pnl IS NOT NULL",
+        (date_str,),
     ).fetchone()
     return row[0]

@@ -31,6 +31,17 @@ class StorageTests(unittest.TestCase):
         )
         self.assertEqual(storage.daily_pnl(self.conn, "2026-06-21"), 0.0)
 
+    def test_daily_pnl_truncated_date_does_not_match(self):
+        storage.log_trade(
+            self.conn, "2026-06-20T10:00:00", "EURUSD_otc", "call", 1.0, 25.0,
+            result="win", pnl=0.85,
+        )
+        storage.log_trade(
+            self.conn, "2026-06-21T10:00:00", "EURUSD_otc", "call", 1.0, 25.0,
+            result="win", pnl=0.75,
+        )
+        self.assertEqual(storage.daily_pnl(self.conn, "2026-06-2"), 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()
