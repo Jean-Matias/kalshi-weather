@@ -23,6 +23,13 @@ class Runner:
             return None
 
         today = dt.date.today().isoformat()
+        # Kill switch is currently inert in production: nothing in this codebase
+        # ever calls client.check_result or writes a trade's outcome/pnl back to
+        # storage, so daily_pnl only ever sums rows with pnl=None (-> 0.0) and this
+        # check never trips. It only "works" in tests that manually insert a pnl
+        # value. A future settlement step (poll check_result after each trade's
+        # expiry, write the outcome back via storage) is required before this is
+        # actually load-bearing.
         if storage.daily_pnl(self.conn, today) <= -self.cfg.DAILY_MAX_LOSS:
             return None
 

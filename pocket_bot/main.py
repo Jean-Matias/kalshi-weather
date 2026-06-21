@@ -20,9 +20,16 @@ def main() -> None:
 
     last_time: int | None = None
     print(f"Starting pocket_bot on {config.PAIR}, demo={config.DEMO}")
+    print(
+        "WARNING: the daily-loss kill switch is NOT wired to real trade outcomes "
+        "yet (no settlement loop writes pnl back to storage) and will NOT stop "
+        "trading on losses."
+    )
     while True:
-        candles = client.get_recent_candles(config.PAIR, period=60, count=config.CANDLE_WINDOW)
-        for candle_time, close in candles:
+        candles = client.get_recent_candles(
+            config.PAIR, period=config.CANDLE_PERIOD_SECONDS, count=config.CANDLE_WINDOW
+        )
+        for candle_time, close in candles[:-1]:
             if last_time is not None and candle_time <= last_time:
                 continue
             last_time = candle_time
