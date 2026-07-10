@@ -32,6 +32,17 @@ FEE_CENTS_PER_CONTRACT = 1.5
 
 Strategy = Callable[[dict, list[dict], int], Optional[dict]]
 
+FeeFn = Callable[[int, int], float]
+
+
+def _flat_fee(_price_cents: int, contracts: int) -> float:
+    """Default fee model: flat FEE_CENTS_PER_CONTRACT/contract (existing
+    behavior — known to not match Kalshi's actual price-dependent fee
+    schedule; kept as the default only so existing callers are unaffected).
+    Reads the module-level constant at call time so monkeypatching it in
+    tests still works."""
+    return FEE_CENTS_PER_CONTRACT * contracts
+
 
 @dataclass
 class Trade:
@@ -134,6 +145,7 @@ def run(
     contracts: int = 3,
     label: str = "strategy",
     decision_hour: int = 24,
+    fee_fn: Optional[FeeFn] = None,
 ) -> Report:
     """Replay `strategy` over `dataset` (from data.load_dataset()).
 
@@ -141,7 +153,13 @@ def run(
     decide (clamped to the shortest bucket's available history per event).
     Markets/days are skipped when there's no usable price data at that hour
     or the strategy declines (`returns None`).
+
+    `fee_fn(limit_price_cents, contracts) -> cents`: pluggable per-trade fee
+    model. Defaults to the flat FEE_CENTS_PER_CONTRACT/contract behavior so
+    existing callers are unaffected; pass a real fee schedule (e.g.
+    hotscout.fees.kalshi_fee_cents) for callers that need it.
     """
+    fee_fn = fee_fn or _flat_fee
     report = Report(label=label)
     for entry in dataset:
         event = entry["event"]
@@ -171,7 +189,7 @@ def run(
             gross = (100 - limit_price) * contracts
         else:
             gross = -limit_price * contracts
-        net = gross - int(FEE_CENTS_PER_CONTRACT * contracts)
+        net = gross - int(fee_fn(limit_price, contracts))
 
         report.trades.append(Trade(
             event_ticker=event["event_ticker"],
