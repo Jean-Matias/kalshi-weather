@@ -143,15 +143,21 @@ def _entry_price_and_source(candle):
 
 
 def _forecast_high_f(conn, city: str, market_date: str):
-    """Smallest lead_days >= MIN_FORECAST_LEAD_DAYS for the date (no lead-0:
-    see MIN_FORECAST_LEAD_DAYS). Returns None if no such forecast exists,
-    which skips the event-day."""
-    row = conn.execute(
-        "SELECT forecast_high_f FROM forecast_daily "
-        "WHERE city = ? AND date = ? AND lead_days >= ? ORDER BY lead_days ASC LIMIT 1",
-        (city, market_date, MIN_FORECAST_LEAD_DAYS),
-    ).fetchone()
-    return None if row is None else row["forecast_high_f"]
+    """Forecast for `market_date` at the smallest available lead_days >=
+    MIN_FORECAST_LEAD_DAYS, averaged across whatever models reported at that
+    lead (see calibration._select_forecast_by_date — this MUST use the same
+    selection/blend logic, since the residual distribution the trade's
+    bucket_probabilities call applies was fit against exactly that
+    population; picking a different forecast value here than what fit()
+    trained on would silently reintroduce a bias the residual correction
+    can't see). Returns None if no forecast exists, which skips the
+    event-day."""
+    from hotscout import calibration
+
+    forecast_by_date = calibration._select_forecast_by_date(
+        conn, city, min_lead_days=MIN_FORECAST_LEAD_DAYS
+    )
+    return forecast_by_date.get(market_date)
 
 
 def _split_dates(dates: list[str]) -> tuple[set, set]:

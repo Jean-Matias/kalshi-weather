@@ -51,7 +51,7 @@ def _build_fixture_conn():
         conn.execute(
             "INSERT INTO forecast_daily (city, date, lead_days, forecast_high_f, model, source) "
             "VALUES (?,?,?,?,?,?)",
-            (CITY, date, 1, 88.0 + i, "fake", "test"),
+            (CITY, date, 1, 88.0 + i, "ncep_nbm_conus", "test"),
         )
         # Decision-hour candle: ts computed the same way backtest._decision_ts_utc
         # would, but we just need SOMETHING at/after 11:00 local; use the exact
