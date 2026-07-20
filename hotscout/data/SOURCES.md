@@ -21,12 +21,15 @@ populate the five source tables defined in `hotscout/schema.py`. Run
 ## forecast_daily — model forecast highs
 
 - **lead_days=0** — `historical-forecast-api.open-meteo.com/v1/forecast`,
-  `daily=temperature_2m_max`, models `ncep_nbm_conus` (NWS's National Blend
-  of Models — closest analog to what Kalshi traders watch) and `best_match`
-  as a fallback/comparison. `ncep_nbm_conus` only returns non-null values
-  from ~2025 onward; older requests come back null and are skipped.
-  Calibration (`hotscout/calibration.py`) prefers `ncep_nbm_conus` over
-  `best_match` when both exist for a date.
+  `daily=temperature_2m_max`, model `ncep_nbm_conus` only (NWS's National
+  Blend of Models). `best_match` was dropped 2026-07-20: it only existed as
+  a pre-2025 coverage fallback (`ncep_nbm_conus` has no data before ~2025),
+  which hotscout's 2026 backtest window never needed, and — since Kalshi
+  settles against a specific NWS station product — every temperature input
+  should be attributable to NWS, not Open-Meteo's separately-blended,
+  not-necessarily-NWS `best_match` model. `ncep_nbm_conus` only returns
+  non-null values from ~2025 onward; older requests come back null and are
+  skipped, but that's outside hotscout's window anyway.
 - **lead_days=1/2/3** — `previous-runs-api.open-meteo.com/v1/forecast`,
   `hourly=temperature_2m_previous_dayN`, model `ncep_nbm_conus` only. This is
   the forecast for a given hour as it stood N days before that hour occurred;

@@ -92,7 +92,7 @@ class CalibrationEndToEndTests(unittest.TestCase):
             cli_high = forecast_high + ((-1) ** i) * 1.0
             conn.execute(
                 "INSERT INTO forecast_daily(city, date, lead_days, forecast_high_f, model, source) "
-                "VALUES (?, ?, 0, ?, 'best_match', 'test')",
+                "VALUES (?, ?, 0, ?, 'ncep_nbm_conus', 'test')",
                 (self.CITY, date_str, forecast_high),
             )
             conn.execute(

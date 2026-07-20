@@ -59,7 +59,7 @@ def _build_fixture_conn():
         conn.execute(
             "INSERT INTO forecast_daily (city, date, lead_days, forecast_high_f, model, source) "
             "VALUES (?,?,?,?,?,?)",
-            (CITY, date, 0, POISON_LEAD0_HIGH, "best_match", "test"),
+            (CITY, date, 0, POISON_LEAD0_HIGH, "ncep_nbm_conus", "test"),
         )
         conn.execute(
             "INSERT INTO forecast_daily (city, date, lead_days, forecast_high_f, model, source) "
@@ -108,7 +108,7 @@ class ForecastLeadSelectionTests(unittest.TestCase):
         conn.execute(
             "INSERT INTO forecast_daily (city, date, lead_days, forecast_high_f, model, source) "
             "VALUES (?,?,?,?,?,?)",
-            (CITY, "2024-08-01", 0, POISON_LEAD0_HIGH, "best_match", "test"),
+            (CITY, "2024-08-01", 0, POISON_LEAD0_HIGH, "ncep_nbm_conus", "test"),
         )
         with mock.patch.object(backtest, "MIN_FORECAST_LEAD_DAYS", 1):
             self.assertEqual(backtest._forecast_high_f(conn, CITY, DATES[0]), LEAD1_HIGH)
