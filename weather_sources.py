@@ -285,15 +285,6 @@ def parse_digital_dwml_forecast(xml_text: str, target_date: str | None) -> dict[
 
 
 def fetch_open_meteo(city_config: dict[str, Any]) -> dict[str, Any]:
-    """Fallback forecast, used live when forecast.weather.gov's XML is down.
-    Pinned to models=ncep_nbm_conus (NWS's National Blend of Models) rather
-    than Open-Meteo's undocumented default model choice: the historical
-    forecast_daily archive that calibration fits residuals against is also
-    ncep_nbm_conus-only (see hotscout/data/forecast_history.py), and Kalshi
-    settles against a specific NWS station product, so this fallback should
-    stay attributable to NWS the same way the primary source and the
-    archive are, not silently hand the model a number from an unrelated
-    non-NWS model on forecast.weather.gov's bad days."""
     forecast_days = _forecast_days_needed(city_config)
     params = {
         "latitude": city_config["latitude"],
@@ -312,7 +303,6 @@ def fetch_open_meteo(city_config: dict[str, Any]) -> dict[str, Any]:
         "wind_speed_unit": "mph",
         "timezone": city_config.get("timezone", "auto"),
         "forecast_days": forecast_days,
-        "models": "ncep_nbm_conus",
     }
     url = "https://api.open-meteo.com/v1/forecast?" + urllib.parse.urlencode(params)
     data = _get_json(url)

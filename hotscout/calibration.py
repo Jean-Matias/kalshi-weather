@@ -44,21 +44,20 @@ def _in_month_window(date_str, month_center):
 
 
 def _select_forecast_by_date(conn, city, min_lead_days=0):
-    """Map date -> forecast_high_f, sourced only from model='ncep_nbm_conus'
-    (NWS's National Blend of Models). Kalshi settles against a specific NWS
-    station product (cli_daily), so the forecast input should be NWS's own
-    model output too, not Open-Meteo's separately-blended 'best_match' — the
-    residual distribution is only a valid correction if what it was fit
-    against is the same thing being predicted with live. Per date: the
-    smallest available lead_days >= min_lead_days wins (if a future model
-    source ever reports more than one row at that lead, they're averaged).
-    The default (min_lead_days=0) reproduces the original lead-0 live
-    behavior. A backtest that only allows itself forecasts issued before the
-    decision hour passes min_lead_days=1 so the residuals are fit from the
-    same forecast population it trades on."""
+    """Map date -> forecast_high_f. Per date: among rows at the smallest
+    available lead_days >= min_lead_days, average every model present
+    (ncep_nbm_conus + best_match when both exist, else whichever one
+    reported) rather than deterministically preferring one model — a
+    same-day multi-model ensemble reduces variance versus picking a single
+    model, since the two disagree in largely uncorrelated ways. Falls back
+    to a single value when only one model reported for that date/lead. The
+    default (min_lead_days=0) reproduces the original lead-0 live behavior.
+    A backtest that only allows itself forecasts issued before the decision
+    hour passes min_lead_days=1 so the residuals are fit from the same
+    forecast population it trades on."""
     rows = conn.execute(
         "SELECT date, model, lead_days, forecast_high_f FROM forecast_daily "
-        "WHERE city=? AND lead_days>=? AND model='ncep_nbm_conus'",
+        "WHERE city=? AND lead_days>=? AND model IN ('ncep_nbm_conus', 'best_match')",
         (city, min_lead_days),
     ).fetchall()
     by_date = {}

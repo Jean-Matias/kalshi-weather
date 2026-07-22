@@ -5,16 +5,10 @@ Two endpoints, verified live:
 1. historical-forecast-api.open-meteo.com/v1/forecast
    daily=temperature_2m_max -- "what the forecast said the high would be, as
    archived for that calendar day" -> stored as lead_days=0.
-   models=ncep_nbm_conus only (NWS's National Blend of Models -- the one
-   model here that's actually attributable to NWS, since Kalshi settles
-   against a specific NWS station product; Open-Meteo is just the transport,
-   not the source). Only returns non-null values from ~2025 onward, but
-   hotscout's whole backtest window (Kalshi history starts 2026-04) is well
-   inside that, so there's no coverage gap to fill. models=best_match was
-   dropped: it existed only as a pre-2025 coverage fallback we don't need,
-   and Open-Meteo's "best_match" is an undocumented, possibly-non-NWS model
-   choice -- exactly what we don't want feeding a model whose residuals are
-   measured against an NWS settlement value.
+   models=best_match always has data back to ~2022. models=ncep_nbm_conus
+   (NWS's National Blend of Models, closest analog to what Kalshi traders
+   actually look at) only returns non-null values from ~2025 onward -- older
+   requests come back with `null` highs, which we skip.
 
 2. previous-runs-api.open-meteo.com/v1/forecast
    hourly=temperature_2m_previous_dayN (N=1,2,3) -- the forecast for a given
@@ -38,7 +32,7 @@ PREV_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
 USER_AGENT = "hotscout-data/0.1 (research-only weather data puller; contact: local-user)"
 TIMEOUT = 30
 
-MODELS_LEAD0 = ["ncep_nbm_conus"]
+MODELS_LEAD0 = ["ncep_nbm_conus", "best_match"]
 PREVIOUS_RUN_LEAD_DAYS = [1, 2, 3]
 PREVIOUS_RUN_MODEL = "ncep_nbm_conus"
 
